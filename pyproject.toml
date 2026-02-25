@@ -1,0 +1,19 @@
+[project]
+name = "llm-3d"
+version = "0.1.0"
+description = "LLM evaluation pipeline for image-to-3D code generation"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "numpy>=1.24.0",
+    "objaverse>=0.1.7",
+    "pillow>=9.0.0",
+    "requests>=2.28.0",
+    "scipy>=1.10.0",
+    "tqdm>=4.64.0",
+    "trimesh>=4.0.0",
+]
+
+[project.optional-dependencies]
+# bpy requires Python 3.11; install Blender standalone as an alternative
+blender = ["bpy"]
