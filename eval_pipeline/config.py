@@ -54,7 +54,7 @@ class Config:
        balancing detail vs. API token cost."""
 
     # ── LLM Evaluation ───────────────────────────────────────────────────────
-    openrouter_api_key: str = "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"
+    openrouter_api_key: str = ""
     """Your OpenRouter API key. Set via OPENROUTER_API_KEY env var or here."""
 
     models: List[str] = field(default_factory=lambda: [
