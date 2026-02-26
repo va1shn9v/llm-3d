@@ -1,0 +1,32 @@
+rl:
+  algorithm: "grpo"
+  sft_checkpoint: "sft-epoch-2"
+  steps: 1000
+  batch_size: 16
+  num_completions: 8
+  learning_rate: 5.0e-6
+  kl_coeff: 0.05
+  clip_ratio: 0.2
+  temperature: 0.7
+  max_new_tokens: 4096
+  checkpoint_every: 100
+  log_every: 10
+
+reward:
+  format_reward_weight: 0.1
+  gate_exec_fail: 0.05
+  gate_no_geometry: 0.10
+  gate_degenerate: 0.15
+  gate_no_resemblance: 0.20
+  quality_floor: 0.30
+  quality_ceil: 1.0
+  f_score_target: 0.6
+
+modal:
+  endpoint: "${MODAL_ENDPOINT}"
+  auth_token: "${MODAL_TOKEN}"
+
+logging:
+  wandb_project: "image-to-3d-rlvr"
+  wandb_enabled: false
+  level: "INFO"

@@ -1,0 +1,174 @@
+# Default project configuration
+# Override with environment variables (LLM3D_ prefix) or pass a different YAML.
+
+project_name: "llm-3d"
+seed: 42
+output_dir: "./output"
+data_dir: "./data"
+blender_path: "blender"
+
+bpy_lib:
+  coordinate_range: 1.0
+  max_vertices_warn: 100000
+  export_format: "obj"
+
+views:
+  num_views: 4
+  resolution: [512, 512]
+  engine: "BLENDER_EEVEE_NEXT"
+  elevation_deg: 25.0
+  film_transparent: true
+  sun_energy: 3.0
+  camera_distance_factor: 2.5
+
+part_generator:
+  num_primitives: 50000
+  num_translations: 100000
+  num_bridge_loops: 50000
+  num_booleans: 50000
+  num_arrays: 50000
+  min_faces: 4
+  cd_accept_threshold: 0.005
+  modal_batch_size: 256
+  seed: 42
+
+infinigen:
+  categories:
+    - chair
+    - table_dining
+    - sofa
+    - lamp
+    - bottle
+    - cup
+    - bowl
+    - vase
+    - toilet
+    - shelf
+    - tv_stand
+    - desk
+    - bathtub
+    - jar
+    - plate
+  objects_per_category: 5000
+  cd_accept_threshold: 0.005
+
+quality_gate:
+  min_faces: 4
+  max_vertices: 100000
+  cd_threshold: 0.005
+  min_f_score_005: 0.05
+
+dataset:
+  sft_train_ratio: 0.90
+  sft_val_ratio: 0.05
+  curriculum: true
+  view_count_weights:
+    1: 0.10
+    2: 0.20
+    3: 0.20
+    4: 0.40
+    6: 0.10
+  system_prompt: >
+    You are a 3D modeling assistant. Given images of a 3D object,
+    generate Blender Python code using the bpy_lib API that reconstructs
+    the object. Output executable code only, no explanations.
+
+modal:
+  blender_version: "4.2.0"
+  blender_cpu: 2
+  blender_memory_mb: 4096
+  blender_timeout_s: 150
+  exec_timeout_s: 120
+  metrics_cpu: 2
+  metrics_memory_mb: 2048
+  metrics_timeout_s: 60
+  render_cpu: 2
+  render_memory_mb: 4096
+  render_timeout_s: 300
+  reward_cpu: 4
+  reward_memory_mb: 8192
+  reward_timeout_s: 600
+  reward_concurrency: 50
+  reward_keep_warm: 1
+  max_parallel_workers: 64
+  volume_name: "llm3d-data"
+
+metrics:
+  num_sample_points_fast: 10000
+  num_sample_points_eval: 100000
+  f_score_thresholds: [0.01, 0.05]
+  hausdorff_percentile: 90.0
+  voxel_grid_size: 32
+
+reward:
+  gate_empty: 0.0
+  gate_no_import: 0.0
+  gate_exec_fail: 0.05
+  gate_no_geometry: 0.10
+  gate_degenerate: 0.15
+  gate_metrics_fail: 0.15
+  gate_no_resemblance: 0.20
+  quality_floor: 0.30
+  quality_ceil: 1.0
+  f_score_target: 0.6
+  format_reward_weight: 0.1
+
+sft:
+  base_model: "Qwen/Qwen2.5-VL-7B-Instruct"
+  lora_rank: 32
+  lora_alpha: 64
+  target_modules:
+    - q_proj
+    - v_proj
+    - k_proj
+    - o_proj
+    - gate_proj
+    - up_proj
+    - down_proj
+  epochs: 3
+  batch_size: 8
+  grad_accum_steps: 4
+  learning_rate: 1.0e-4
+  weight_decay: 0.01
+  warmup_steps: 100
+  max_seq_length: 32768
+  eval_every_n_steps: 500
+  eval_num_samples: 200
+  eval_temperature: 0.0
+  train_path: "datasets/sft_train.jsonl"
+  val_path: "datasets/sft_val.jsonl"
+
+rl:
+  algorithm: "grpo"
+  sft_checkpoint: "sft-epoch-2"
+  steps: 1000
+  batch_size: 16
+  num_completions: 8
+  learning_rate: 5.0e-6
+  kl_coeff: 0.05
+  clip_ratio: 0.2
+  temperature: 0.7
+  max_new_tokens: 4096
+  checkpoint_every: 100
+  log_every: 10
+
+eval:
+  id_test_size: 1500
+  ood_objaverse: 500
+  ood_gso: 300
+  ood_unseen_categories: 200
+  unseen_categories:
+    - fork
+    - spoon
+    - tv
+    - window
+    - door
+  view_counts: [1, 2, 3, 4, 6]
+  temperature: 0.0
+  bootstrap_samples: 10000
+
+logging:
+  level: "INFO"
+  log_dir: "./logs"
+  wandb_project: "image-to-3d-rlvr"
+  wandb_enabled: false

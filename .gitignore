@@ -2,34 +2,43 @@
 __pycache__/
 *.py[cod]
 *$py.class
-*.so
 *.egg-info/
-*.egg
 dist/
 build/
+.eggs/
 
 # Virtual environments
 .venv/
 venv/
 env/
 
-# Evaluation outputs (generated, large binaries)
-eval_results/
-
-# OS
-.DS_Store
-Thumbs.db
-
 # IDE
 .vscode/
 .idea/
 *.swp
 *.swo
+.cursor/
 
-# Environment / secrets
+# OS
+.DS_Store
+Thumbs.db
+
+# Generated data (large)
+output/
+logs/
+datasets/
+data/parts/
+data/infinigen_objects/
+data/extracted_parts/
+data/renders/
+data/meshes/
+
+# Modal
+.modal/
+
+# Env files
 .env
-.env.*
+.env.local
 
-# Blender temp files
-*.blend1
-*.blend2
+# Lock files
+uv.lock

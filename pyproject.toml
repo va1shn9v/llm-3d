@@ -1,19 +1,40 @@
 [project]
 name = "llm-3d"
-version = "0.1.0"
-description = "LLM evaluation pipeline for image-to-3D code generation"
+version = "0.2.0"
+description = "Image-to-3D code generation via RLVR — Blender Python from multi-view images"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
     "numpy>=1.24.0",
-    "objaverse>=0.1.7",
-    "pillow>=9.0.0",
-    "requests>=2.28.0",
-    "scipy>=1.10.0",
-    "tqdm>=4.64.0",
+    "scipy>=1.11.0",
     "trimesh>=4.0.0",
+    "pillow>=10.0.0",
+    "requests>=2.28.0",
+    "tqdm>=4.64.0",
+    "pydantic>=2.5.0",
+    "pydantic-settings>=2.1.0",
+    "pyyaml>=6.0",
+    "httpx>=0.25.0",
 ]
 
 [project.optional-dependencies]
-# bpy requires Python 3.11; install Blender standalone as an alternative
-blender = ["bpy"]
+modal = ["modal>=0.64.0"]
+training = ["verifiers>=0.2.0"]
+data = [
+    "objaverse>=0.1.7",
+    "scikit-learn>=1.3.0",
+    "pandas>=2.0.0",
+]
+dev = [
+    "ruff>=0.3.0",
+    "pytest>=8.0.0",
+]
+all = ["llm-3d[modal,training,data,dev]"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "W"]
+ignore = ["E501"]

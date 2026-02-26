@@ -1,0 +1,23 @@
+eval:
+  id_test_size: 1500
+  ood_objaverse: 500
+  ood_gso: 300
+  ood_unseen_categories: 200
+  unseen_categories:
+    - "fork"
+    - "spoon"
+    - "tv"
+    - "window"
+    - "door"
+  view_counts: [1, 2, 3, 4, 6]
+  temperature: 0.0
+  bootstrap_samples: 10000
+
+metrics:
+  num_sample_points_fast: 10000
+  num_sample_points_eval: 100000
+  f_score_thresholds: [0.01, 0.05]
+  hausdorff_percentile: 90.0
+  voxel_grid_size: 32
+
+output_dir: "./output/eval"

@@ -1,0 +1,89 @@
+# Category definitions and difficulty levels for the 15 primary categories.
+# Used by the data pipeline for Infinigen object generation and dataset building.
+
+primary_categories:
+  - name: chair
+    difficulty: medium
+    expected_parts: [4, 12]
+    priority: 1
+  - name: table_dining
+    difficulty: medium
+    expected_parts: [4, 8]
+    priority: 1
+  - name: sofa
+    difficulty: hard
+    expected_parts: [5, 15]
+    priority: 1
+  - name: lamp
+    difficulty: easy
+    expected_parts: [2, 6]
+    priority: 1
+  - name: bottle
+    difficulty: easy
+    expected_parts: [1, 3]
+    priority: 2
+  - name: cup
+    difficulty: easy
+    expected_parts: [1, 4]
+    priority: 2
+  - name: bowl
+    difficulty: easy
+    expected_parts: [1, 2]
+    priority: 2
+  - name: vase
+    difficulty: easy
+    expected_parts: [1, 3]
+    priority: 2
+  - name: toilet
+    difficulty: medium
+    expected_parts: [3, 8]
+    priority: 1
+  - name: shelf
+    difficulty: medium
+    expected_parts: [4, 12]
+    priority: 1
+  - name: tv_stand
+    difficulty: medium
+    expected_parts: [3, 10]
+    priority: 2
+  - name: desk
+    difficulty: medium
+    expected_parts: [4, 10]
+    priority: 1
+  - name: bathtub
+    difficulty: medium
+    expected_parts: [2, 6]
+    priority: 2
+  - name: jar
+    difficulty: easy
+    expected_parts: [1, 3]
+    priority: 2
+  - name: plate
+    difficulty: easy
+    expected_parts: [1, 2]
+    priority: 2
+
+ood_categories:
+  - fork
+  - spoon
+  - tv
+  - window
+  - door
+
+part_type_complexity:
+  primitive: 1
+  translation: 2
+  bridge_loop: 3
+  boolean: 3
+  array: 2
+
+difficulty_buckets:
+  easy:
+    range: [0.0, 0.33]
+    sft_fraction: 0.30
+  medium:
+    range: [0.33, 0.66]
+    sft_fraction: 0.40
+  hard:
+    range: [0.66, 1.0]
+    sft_fraction: 0.30

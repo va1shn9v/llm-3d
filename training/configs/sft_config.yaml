@@ -1,0 +1,38 @@
+sft:
+  base_model: "Qwen/Qwen2.5-VL-7B-Instruct"
+  lora_rank: 32
+  lora_alpha: 64
+  target_modules:
+    - "q_proj"
+    - "v_proj"
+    - "k_proj"
+    - "o_proj"
+    - "gate_proj"
+    - "up_proj"
+    - "down_proj"
+  epochs: 3
+  batch_size: 8
+  grad_accum_steps: 4
+  learning_rate: 1.0e-4
+  weight_decay: 0.01
+  warmup_steps: 100
+  max_seq_length: 32768
+  eval_every_n_steps: 500
+  eval_num_samples: 200
+  eval_temperature: 0.0
+  train_path: "datasets/sft_train.jsonl"
+  val_path: "datasets/sft_val.jsonl"
+
+dataset:
+  curriculum: true
+  view_count_weights:
+    1: 0.10
+    2: 0.20
+    3: 0.20
+    4: 0.40
+    6: 0.10
+
+logging:
+  wandb_project: "image-to-3d-rlvr"
+  wandb_enabled: false
+  level: "INFO"
