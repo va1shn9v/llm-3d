@@ -54,11 +54,12 @@ class BpyLibConfig(BaseModel):
 class ViewConfig(BaseModel):
     num_views: int = 4
     resolution: tuple[int, int] = (512, 512)
-    engine: str = "BLENDER_EEVEE_NEXT"
+    engine: str = "CYCLES"
     elevation_deg: float = 25.0
     film_transparent: bool = True
     sun_energy: float = 3.0
     camera_distance_factor: float = 2.5
+    cycles_samples: int = 128
 
 
 class PartGeneratorConfig(BaseModel):
@@ -71,17 +72,6 @@ class PartGeneratorConfig(BaseModel):
     cd_accept_threshold: float = 5e-3
     modal_batch_size: int = 256
     seed: int = 42
-
-
-class InfinigenConfig(BaseModel):
-    categories: list[str] = Field(default_factory=lambda: [
-        "chair", "table_dining", "sofa", "lamp", "bottle", "cup", "bowl",
-        "vase", "toilet", "shelf", "tv_stand", "desk", "bathtub", "jar", "plate",
-    ])
-    objects_per_category: int = 5_000
-    cd_accept_threshold: float = 5e-3
-    infinigen_path: str = "./third_party/infinigen"
-    output_dir: str = "./data/infinigen_objects"
 
 
 class QualityGateConfig(BaseModel):
@@ -234,7 +224,6 @@ class ProjectConfig(BaseSettings):
     bpy_lib: BpyLibConfig = Field(default_factory=BpyLibConfig)
     views: ViewConfig = Field(default_factory=ViewConfig)
     part_generator: PartGeneratorConfig = Field(default_factory=PartGeneratorConfig)
-    infinigen: InfinigenConfig = Field(default_factory=InfinigenConfig)
     quality_gate: QualityGateConfig = Field(default_factory=QualityGateConfig)
     dataset: DatasetConfig = Field(default_factory=DatasetConfig)
     modal: ModalConfig = Field(default_factory=ModalConfig)

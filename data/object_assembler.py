@@ -15,9 +15,26 @@ from typing import Any
 import numpy as np
 
 from data.part_fitter import FitResult
-from data.infinigen_extractor import ExtractedObject, ExtractedPart
 
 log = logging.getLogger(__name__)
+
+
+@dataclass
+class ExtractedPart:
+    object_id: str
+    part_index: int
+    label: str
+    mesh_path: str
+    bbox: list[float] = field(default_factory=list)
+    transform: dict[str, list[float]] = field(default_factory=dict)
+
+
+@dataclass
+class ExtractedObject:
+    object_id: str
+    category: str
+    parts: list[ExtractedPart] = field(default_factory=list)
+    mesh_path: str = ""
 
 
 @dataclass

@@ -26,11 +26,12 @@ bpy_lib/                   # Constrained Blender Python API library
 └── tests/                 # Unit tests (run in Blender)
 
 data/                      # Data pipeline
+├── dataset_preprocessor.py # Load meshes, render multi-view images, store to disk
 ├── part_generator.py      # Synthetic part generation (~300K samples)
-├── infinigen_extractor.py # Extract parts from Infinigen Indoor objects
 ├── part_fitter.py         # Fit bpy_lib code to part meshes (template matching)
 ├── object_assembler.py    # Assemble parts into full object code
 ├── dataset_builder.py     # Build SFT/RL/eval datasets in Qwen2.5-VL chat format
+├── dataset_analyzer.py    # Inspect MeshCoderDataset (streaming, no full download)
 └── configs/categories.yaml
 
 modal_infra/               # Modal serverless functions
@@ -97,6 +98,16 @@ The config system (`config.py`) loads `dev.env` automatically via `load_config()
 
 ```bash
 ./scripts/generate_parts.sh
+```
+
+### Phase 1.5: Preprocess — render multi-view images
+
+```bash
+./scripts/preprocess_dataset.sh
+# or directly:
+python -m data.dataset_preprocessor --mesh-dir ./meshes --output-dir ./data/renders
+python -m data.dataset_preprocessor --mesh-dir ./meshes --num-views 5 --resolution 512 512
+python -m data.dataset_preprocessor --hf-dataset InternRobotics/MeshCoderDataset --output-dir ./data/renders
 ```
 
 ### Phase 2: Build object dataset

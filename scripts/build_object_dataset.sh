@@ -19,35 +19,16 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s | %(levelname)s | %(
 from config import load_config
 
 cfg = load_config('$CONFIG')
-print(f'Categories: {cfg.infinigen.categories}')
-print(f'Objects per category: {cfg.infinigen.objects_per_category}')
 print(f'CD threshold: {cfg.quality_gate.cd_threshold}')
 
-# Step 1: Extract parts from Infinigen objects
-from data.infinigen_extractor import extract_objects_from_directory
-extracted = extract_objects_from_directory(
-    cfg.infinigen.output_dir,
-    f'{cfg.data_dir}/extracted_parts',
-    cfg.infinigen.categories,
-)
-print(f'Extracted {len(extracted)} objects')
+# Step 1: Load MeshCoderDataset
+from datasets import load_dataset
+ds = load_dataset('InternRobotics/MeshCoderDataset')
+print(f'Train: {len(ds[\"train\"])} | Val: {len(ds[\"validation\"])} | Test: {len(ds[\"test\"])}')
 
-# Step 2: Fit parts to bpy_lib code
-from data.part_fitter import fit_all_parts
-all_fits = []
-for obj in extracted:
-    part_paths = [p.mesh_path for p in obj.parts]
-    fits = fit_all_parts(part_paths, cfg.quality_gate.cd_threshold)
-    all_fits.append(fits)
-
-# Step 3: Assemble into full objects
-from data.object_assembler import assemble_all_objects
-assembled = assemble_all_objects(extracted, all_fits, cfg.quality_gate.cd_threshold)
-print(f'Assembled {len(assembled)} objects (from {len(extracted)} extracted)')
-
-# Step 4: Build dataset splits
+# Step 2: Build dataset splits
 from data.dataset_builder import build_datasets, save_splits
-splits = build_datasets(assembled, f'{cfg.data_dir}/renders', cfg)
+splits = build_datasets(ds, f'{cfg.data_dir}/renders', cfg)
 save_splits(splits, f'{cfg.output_dir}/datasets')
 print('Dataset splits saved.')
 "

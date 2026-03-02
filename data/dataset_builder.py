@@ -159,10 +159,8 @@ def build_datasets(
         for obj, diff in split_objs:
             img_dir = Path(images_dir) / obj.object_id
             all_images = {}
-            for i in range(6):
-                p = img_dir / f"view_{i}.png"
-                if p.exists():
-                    all_images[f"view_{i}"] = str(p)
+            for p in sorted(img_dir.glob("view_*.png")) if img_dir.is_dir() else []:
+                all_images[p.stem] = str(p)
 
             if not all_images:
                 continue
