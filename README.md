@@ -69,6 +69,28 @@ pip install -e ".[training]"  # Training deps only
 pip install -e ".[data]"      # Data pipeline deps only
 ```
 
+## Environment Setup
+
+Copy the template env file and fill in your keys:
+
+```bash
+cp dev.env.example dev.env   # or just edit dev.env directly
+```
+
+Required variables in `dev.env`:
+
+| Variable | Purpose |
+|---|---|
+| `TINKER_API_KEY` | Tinker platform API key (read by SDK automatically) |
+| `MODAL_TOKEN_ID` | Modal platform authentication |
+| `MODAL_TOKEN_SECRET` | Modal platform authentication |
+| `LLM3D_MODAL__ENDPOINT` | Deployed Modal reward API URL |
+| `LLM3D_MODAL__AUTH_TOKEN` | Reward API auth token |
+| `REWARD_API_TOKEN` | Token used inside Modal container |
+| `WANDB_API_KEY` | Weights & Biases (optional) |
+
+The config system (`config.py`) loads `dev.env` automatically via `load_config()`. Variables prefixed with `LLM3D_` map to project config fields (nested with `__`, e.g. `LLM3D_MODAL__ENDPOINT` → `modal.endpoint`). Non-prefixed variables like `TINKER_API_KEY` are loaded into `os.environ` for their respective SDKs.
+
 ## Pipeline
 
 ### Phase 1: Generate synthetic parts
@@ -86,8 +108,6 @@ pip install -e ".[data]"      # Data pipeline deps only
 ### Phase 3: Deploy reward API
 
 ```bash
-export MODAL_TOKEN_ID=...
-export MODAL_TOKEN_SECRET=...
 ./scripts/deploy_reward_api.sh
 ```
 
@@ -100,8 +120,6 @@ export MODAL_TOKEN_SECRET=...
 ### Phase 5: RL training
 
 ```bash
-export MODAL_ENDPOINT=https://your-workspace--reward-api-web.modal.run
-export MODAL_TOKEN=...
 ./scripts/run_rl.sh
 ```
 
@@ -114,8 +132,9 @@ export MODAL_TOKEN=...
 ## Configuration
 
 All settings are managed through `config.py` with Pydantic models. Override via:
+- Env file: `dev.env` (loaded automatically, supports all keys including `TINKER_API_KEY`)
 - YAML file: `configs/default.yaml`
-- Environment variables: `LLM3D_` prefix (e.g., `LLM3D_SEED=123`)
+- Environment variables: `LLM3D_` prefix with `__` for nesting (e.g., `LLM3D_MODAL__ENDPOINT`)
 - Programmatic: `load_config(yaml_path, seed=123)`
 
 ## Key Design Decisions

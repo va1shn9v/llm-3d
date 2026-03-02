@@ -113,18 +113,16 @@ reward:
   f_score_target: 0.6
   format_reward_weight: 0.1
 
+tinker:
+  base_model: "Qwen/Qwen2.5-VL-7B-Instruct"
+
 sft:
   base_model: "Qwen/Qwen2.5-VL-7B-Instruct"
   lora_rank: 32
   lora_alpha: 64
-  target_modules:
-    - q_proj
-    - v_proj
-    - k_proj
-    - o_proj
-    - gate_proj
-    - up_proj
-    - down_proj
+  train_mlp: true
+  train_attn: true
+  train_unembed: true
   epochs: 3
   batch_size: 8
   grad_accum_steps: 4

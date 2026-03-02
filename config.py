@@ -13,12 +13,31 @@ Usage:
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import Any
 
 import yaml
 from pydantic import BaseModel, Field
 from pydantic_settings import BaseSettings
+
+_ENV_FILE = "dev.env"
+
+
+def _load_env_file(path: str | Path = _ENV_FILE) -> None:
+    """Load variables from an env file into os.environ (setdefault, won't overwrite)."""
+    p = Path(path)
+    if not p.exists():
+        return
+    for line in p.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        key, _, value = line.partition("=")
+        key = key.strip()
+        value = value.strip().strip("'\"")
+        if key:
+            os.environ.setdefault(key, value)
 
 
 # ---------------------------------------------------------------------------
@@ -138,13 +157,18 @@ class RewardConfig(BaseModel):
     format_reward_weight: float = 0.1
 
 
+class TinkerConfig(BaseModel):
+    """Tinker platform settings.  TINKER_API_KEY is read from env by the SDK."""
+    base_model: str = "Qwen/Qwen2.5-VL-7B-Instruct"
+
+
 class SFTConfig(BaseModel):
     base_model: str = "Qwen/Qwen2.5-VL-7B-Instruct"
     lora_rank: int = 32
     lora_alpha: int = 64
-    target_modules: list[str] = Field(default_factory=lambda: [
-        "q_proj", "v_proj", "k_proj", "o_proj", "gate_proj", "up_proj", "down_proj",
-    ])
+    train_mlp: bool = True
+    train_attn: bool = True
+    train_unembed: bool = True
     epochs: int = 3
     batch_size: int = 8
     grad_accum_steps: int = 4
@@ -216,12 +240,17 @@ class ProjectConfig(BaseSettings):
     modal: ModalConfig = Field(default_factory=ModalConfig)
     metrics: MetricsConfig = Field(default_factory=MetricsConfig)
     reward: RewardConfig = Field(default_factory=RewardConfig)
+    tinker: TinkerConfig = Field(default_factory=TinkerConfig)
     sft: SFTConfig = Field(default_factory=SFTConfig)
     rl: RLConfig = Field(default_factory=RLConfig)
     eval: EvalConfig = Field(default_factory=EvalConfig)
     logging: LoggingConfig = Field(default_factory=LoggingConfig)
 
-    model_config = {"env_prefix": "LLM3D_", "extra": "ignore"}
+    model_config = {
+        "env_prefix": "LLM3D_",
+        "env_nested_delimiter": "__",
+        "extra": "ignore",
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -241,12 +270,19 @@ def _deep_merge(base: dict, override: dict) -> dict:
 
 def load_config(
     yaml_path: str | Path | None = None,
+    env_file: str | Path = _ENV_FILE,
     **overrides: Any,
 ) -> ProjectConfig:
     """Load configuration from optional YAML file with programmatic overrides.
 
     Precedence (highest wins): overrides > YAML > env vars > defaults.
+
+    The *env_file* (default ``dev.env``) is loaded into ``os.environ`` first so
+    that both pydantic-settings and third-party SDKs (Tinker, Modal, W&B) can
+    pick up their keys automatically.
     """
+    _load_env_file(env_file)
+
     data: dict = {}
 
     if yaml_path is not None:

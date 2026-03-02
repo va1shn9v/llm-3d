@@ -39,6 +39,7 @@ data/meshes/
 # Env files
 .env
 .env.local
+dev.env
 
 # Lock files
 uv.lock

@@ -19,6 +19,7 @@ import numpy as np
 from config import ProjectConfig, load_config
 from environments.blender_3d.dataset import Blender3DDataset
 from environments.blender_3d.harness import Blender3DHarness
+from training.wandb_logger import WandbLogger
 
 log = logging.getLogger(__name__)
 
@@ -83,6 +84,12 @@ class EvalRunner:
         self.harness = Blender3DHarness(
             modal_endpoint=self.cfg.modal.endpoint,
             auth_token=self.cfg.modal.auth_token,
+        )
+        self.wb = WandbLogger(
+            self.cfg.logging,
+            run_name="eval",
+            tags=["eval"],
+            extra_config=self.cfg.eval.model_dump(),
         )
 
     async def evaluate_condition(
@@ -213,6 +220,17 @@ class EvalRunner:
                     agg = self.aggregate(results, cond_name, ts_name, nv)
                     all_agg.append(agg)
 
+                    prefix = f"eval/{cond_name}/{ts_name}/{nv}v"
+                    self.wb.log({
+                        f"{prefix}/execution_rate": agg.execution_rate,
+                        f"{prefix}/geometry_rate": agg.geometry_rate,
+                        f"{prefix}/f_score_005": agg.mean_f_score_005,
+                        f"{prefix}/chamfer": agg.mean_chamfer,
+                        f"{prefix}/hausdorff_90": agg.mean_hausdorff_90,
+                        f"{prefix}/normal_consistency": agg.mean_normal_consistency,
+                        f"{prefix}/reward": agg.mean_reward,
+                    })
+
                     log.info(
                         f"  {cond_name}/{ts_name}/{nv}v: "
                         f"exec={agg.execution_rate:.2f} "
@@ -221,6 +239,7 @@ class EvalRunner:
                         f"reward={agg.mean_reward:.3f}"
                     )
 
+        self.wb.finish()
         return all_agg
 
     def save_results(

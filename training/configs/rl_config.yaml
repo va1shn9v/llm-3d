@@ -22,9 +22,8 @@ reward:
   quality_ceil: 1.0
   f_score_target: 0.6
 
-modal:
-  endpoint: "${MODAL_ENDPOINT}"
-  auth_token: "${MODAL_TOKEN}"
+# modal.endpoint and modal.auth_token are loaded from dev.env via
+# LLM3D_MODAL__ENDPOINT and LLM3D_MODAL__AUTH_TOKEN environment variables.
 
 logging:
   wandb_project: "image-to-3d-rlvr"
