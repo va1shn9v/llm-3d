@@ -1,0 +1,14 @@
+# Prioritize geometric accuracy: 85% geometry, 10% CLIP, 5% format.
+gate_empty: 0.0
+gate_no_import: 0.0
+gate_exec_fail: 0.05
+gate_no_geometry: 0.10
+gate_degenerate: 0.15
+gate_metrics_fail: 0.15
+gate_no_resemblance: 0.20
+quality_floor: 0.30
+quality_ceil: 1.0
+f_score_target: 0.6
+geometric_weight: 0.85
+text_alignment_weight: 0.10
+format_reward_weight: 0.05

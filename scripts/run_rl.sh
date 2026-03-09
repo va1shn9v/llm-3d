@@ -1,20 +1,27 @@
 #!/usr/bin/env bash
-# Run GRPO RL training.
+# Phase 3-4: Run GRPO RL training with hard prompt mining.
+#
+# Uses Hydra for config management. Override any parameter on the CLI:
+#   ./scripts/run_rl.sh reward=geometry_heavy rl.learning_rate=1e-5
+#
+# Run a sweep over reward settings:
+#   ./scripts/run_rl.sh --multirun reward.f_score_target=0.4,0.6,0.8
+#
+# Use an experiment preset:
+#   ./scripts/run_rl.sh +experiment=reward_sweep --multirun
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 cd "$PROJECT_ROOT"
 
-CONFIG="${1:-training/configs/rl_config.yaml}"
+echo "=== Starting GRPO RL Training (with hard mining) ==="
+echo "Hydra overrides: $*"
+echo ""
+echo "Hard mining will oversample prompts where teacher LLM failed"
+echo "during synthetic data generation (tracked in hard_prompts.csv)."
+echo ""
 
-echo "=== Starting GRPO RL Training ==="
-echo "Config: $CONFIG"
-echo "Modal endpoint: ${MODAL_ENDPOINT:-<not set>}"
-
-python -c "
-from training.rl_trainer import run_rl
-run_rl('$CONFIG')
-"
+python -m training.rl_trainer "$@"
 
 echo "=== RL Training Complete ==="

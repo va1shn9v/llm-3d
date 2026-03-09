@@ -1,8 +1,8 @@
 """
-Build SFT / RL / eval datasets from assembled objects (Section 4 of spec).
+Build SFT / RL / eval datasets from synthetic (caption, raw_bpy_code) pairs.
 
-Converts assembled objects into Qwen2.5-VL chat format, applies curriculum
-ordering, view count augmentation, and train/val/eval splits.
+Converts validated pairs into text-only chat format, applies curriculum
+ordering by difficulty, and produces train/val/eval/rl_prompts splits.
 """
 
 from __future__ import annotations
@@ -12,10 +12,7 @@ import logging
 from dataclasses import dataclass, field
 from pathlib import Path
 
-import numpy as np
-
 from config import load_config, ProjectConfig
-from data.object_assembler import AssembledObject
 
 log = logging.getLogger(__name__)
 
@@ -24,29 +21,23 @@ log = logging.getLogger(__name__)
 # Difficulty scoring
 # ---------------------------------------------------------------------------
 
-_PART_TYPE_COMPLEXITY = {
-    "primitive": 1,
-    "translation": 2,
-    "bridge_loop": 3,
-    "boolean": 3,
-    "array": 2,
-}
+def compute_difficulty(entry: dict) -> float:
+    """Heuristic difficulty from code length and mesh complexity.
 
+    Higher = harder. Scores roughly in [0, 1].
+    """
+    code = entry.get("code", "")
+    metrics = entry.get("metrics", {})
 
-def compute_difficulty(obj: AssembledObject) -> float:
-    """Heuristic difficulty: 0.4*num_parts + 0.3*code_tokens + 0.3*max_complexity."""
-    num_parts = obj.num_parts
-    code_tokens = len(obj.code.split())
-    max_complexity = max(
-        (_PART_TYPE_COMPLEXITY.get(p["type"], 1) for p in obj.parts_info),
-        default=1,
-    )
-
-    np_score = min(num_parts / 20.0, 1.0)
+    code_tokens = len(code.split())
     ct_score = min(code_tokens / 500.0, 1.0)
-    mc_score = max_complexity / 3.0
 
-    return 0.4 * np_score + 0.3 * ct_score + 0.3 * mc_score
+    vertex_count = metrics.get("vertex_count", 0)
+    face_count = metrics.get("face_count", 0)
+    vc_score = min(vertex_count / 50_000.0, 1.0)
+    fc_score = min(face_count / 20_000.0, 1.0)
+
+    return 0.4 * ct_score + 0.3 * vc_score + 0.3 * fc_score
 
 
 # ---------------------------------------------------------------------------
@@ -54,63 +45,41 @@ def compute_difficulty(obj: AssembledObject) -> float:
 # ---------------------------------------------------------------------------
 
 def format_sft_sample(
-    obj: AssembledObject,
-    image_paths: list[str],
+    caption: str,
+    code: str,
     system_prompt: str,
 ) -> dict:
-    """Format a single sample as Qwen2.5-VL chat messages."""
-    user_content = []
-    for img_path in image_paths:
-        user_content.append({"type": "image", "image_url": img_path})
-
-    user_content.append({
-        "type": "text",
-        "text": (
-            f"Generate Blender Python code to reconstruct this 3D object. "
-            f"The object is a {obj.category}. Use the bpy_lib API functions "
-            f"(create_primitive, create_curve, fill_grid, create_translation, "
-            f"create_bridge_loop, boolean_op, bevel, create_array_1d, "
-            f"create_array_2d). Structure the code with part comments and "
-            f"call export_scene() at the end."
-        ),
-    })
+    """Format a single sample as text-only chat messages for SFT."""
+    user_text = (
+        f"Create a 3D model of: {caption}. "
+        f"Write a complete Blender Python script using the bpy module."
+    )
 
     return {
         "messages": [
             {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_content},
-            {"role": "assistant", "content": obj.code},
+            {"role": "user", "content": user_text},
+            {"role": "assistant", "content": code},
         ]
     }
 
 
-# ---------------------------------------------------------------------------
-# View count sampling
-# ---------------------------------------------------------------------------
+def format_rl_prompt(
+    caption: str,
+    system_prompt: str,
+) -> dict:
+    """Format a prompt for RL (no assistant turn — model generates that)."""
+    user_text = (
+        f"Create a 3D model of: {caption}. "
+        f"Write a complete Blender Python script using the bpy module."
+    )
 
-def sample_view_count(
-    weights: dict[int, float],
-    rng: np.random.Generator,
-) -> int:
-    """Sample a view count from the weighted distribution."""
-    counts = list(weights.keys())
-    probs = np.array(list(weights.values()))
-    probs /= probs.sum()
-    return int(rng.choice(counts, p=probs))
-
-
-def select_views(
-    all_image_paths: dict[str, str],
-    num_views: int,
-) -> list[str]:
-    """Select num_views images with maximum azimuth spread."""
-    total = len(all_image_paths)
-    if num_views >= total:
-        return list(all_image_paths.values())
-
-    indices = sorted(range(total), key=lambda i: i * total // num_views)[:num_views]
-    keys = sorted(all_image_paths.keys())
-    return [all_image_paths[keys[i]] for i in indices]
+    return {
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_text},
+        ]
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -124,63 +93,80 @@ class DatasetSplit:
 
 
 def build_datasets(
-    objects: list[AssembledObject],
-    images_dir: str,
+    synthetic_jsonl_path: str | Path,
+    manifest_jsonl_path: str | Path | None = None,
     cfg: ProjectConfig | None = None,
 ) -> dict[str, DatasetSplit]:
-    """Build all dataset splits from assembled objects.
+    """Build all dataset splits from synthetic SFT data.
 
-    Returns dict mapping split name to DatasetSplit.
+    Reads the validated (caption, code) pairs, computes difficulty, applies
+    curriculum ordering, and splits into sft_train / sft_val / eval_id.
+
+    Also builds an rl_prompts split from the full manifest (including captions
+    where the teacher failed — those benefit most from RL exploration).
     """
     if cfg is None:
         cfg = load_config()
 
-    rng = np.random.default_rng(cfg.seed)
+    entries = []
+    with open(synthetic_jsonl_path) as f:
+        for line in f:
+            line = line.strip()
+            if line:
+                entries.append(json.loads(line))
 
-    objects_with_difficulty = [(obj, compute_difficulty(obj)) for obj in objects]
+    entries_with_diff = [(e, compute_difficulty(e)) for e in entries]
     if cfg.dataset.curriculum:
-        objects_with_difficulty.sort(key=lambda x: x[1])
+        entries_with_diff.sort(key=lambda x: x[1])
 
-    n = len(objects_with_difficulty)
+    n = len(entries_with_diff)
     n_train = int(n * cfg.dataset.sft_train_ratio)
     n_val = int(n * cfg.dataset.sft_val_ratio)
 
-    train_objs = objects_with_difficulty[:n_train]
-    val_objs = objects_with_difficulty[n_train:n_train + n_val]
-    eval_objs = objects_with_difficulty[n_train + n_val:]
+    train_entries = entries_with_diff[:n_train]
+    val_entries = entries_with_diff[n_train:n_train + n_val]
+    eval_entries = entries_with_diff[n_train + n_val:]
 
-    splits = {}
-    for split_name, split_objs in [
-        ("sft_train", train_objs),
-        ("sft_val", val_objs),
-        ("eval_id", eval_objs),
+    system_prompt = cfg.dataset.system_prompt
+    splits: dict[str, DatasetSplit] = {}
+
+    for split_name, split_entries in [
+        ("sft_train", train_entries),
+        ("sft_val", val_entries),
+        ("eval_id", eval_entries),
     ]:
         samples = []
-        for obj, diff in split_objs:
-            img_dir = Path(images_dir) / obj.object_id
-            all_images = {}
-            for p in sorted(img_dir.glob("view_*.png")) if img_dir.is_dir() else []:
-                all_images[p.stem] = str(p)
-
-            if not all_images:
-                continue
-
-            nv = sample_view_count(cfg.dataset.view_count_weights, rng)
-            selected = select_views(all_images, nv)
-
-            sample = format_sft_sample(obj, selected, cfg.dataset.system_prompt)
+        for entry, diff in split_entries:
+            sample = format_sft_sample(entry["caption"], entry["code"], system_prompt)
             sample["metadata"] = {
-                "object_id": obj.object_id,
-                "category": obj.category,
-                "num_parts": obj.num_parts,
-                "total_cd": obj.total_cd,
+                "object_id": entry.get("uid", ""),
+                "caption": entry["caption"],
                 "difficulty": round(diff, 4),
-                "num_views": nv,
+                "gt_mesh_path": entry.get("gt_mesh_path", ""),
             }
             samples.append(sample)
 
         splits[split_name] = DatasetSplit(name=split_name, samples=samples)
         log.info(f"  {split_name}: {len(samples)} samples")
+
+    if manifest_jsonl_path:
+        rl_samples = []
+        with open(manifest_jsonl_path) as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                entry = json.loads(line)
+                prompt = format_rl_prompt(entry["caption"], system_prompt)
+                prompt["metadata"] = {
+                    "object_id": entry.get("uid", ""),
+                    "caption": entry["caption"],
+                    "gt_mesh_path": entry.get("mesh_path", ""),
+                }
+                rl_samples.append(prompt)
+
+        splits["rl_prompts"] = DatasetSplit(name="rl_prompts", samples=rl_samples)
+        log.info(f"  rl_prompts: {len(rl_samples)} prompts (full manifest)")
 
     return splits
 

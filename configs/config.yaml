@@ -1,5 +1,8 @@
-# Default project configuration for text-to-3D RLVR pipeline
-# Override with environment variables (LLM3D_ prefix) or pass a different YAML.
+defaults:
+  - reward: default
+  - rl: default
+  - sft: default
+  - _self_
 
 project_name: "llm-3d"
 seed: 42
@@ -15,11 +18,19 @@ views:
   film_transparent: true
   sun_energy: 3.0
   camera_distance_factor: 2.5
+  cycles_samples: 128
+
+quality_gate:
+  min_faces: 4
+  max_vertices: 100000
+  cd_threshold: 0.05
+  min_f_score_005: 0.05
 
 objaverse_filter:
   quality_tiers: ["High", "Superior"]
   exclude_scenes: true
   exclude_transparent: true
+  max_uids: null
   output_path: "datasets/filtered_uids.json"
 
 synthetic_gen:
@@ -44,15 +55,11 @@ hard_mining:
   min_failure_rate: 0.5
   min_attempts: 2
 
-quality_gate:
-  min_faces: 4
-  max_vertices: 100000
-  cd_threshold: 0.05
-  min_f_score_005: 0.05
-
 dataset:
   sft_train_ratio: 0.90
   sft_val_ratio: 0.05
+  eval_id_ratio: 0.03
+  eval_ood_ratio: 0.02
   curriculum: true
   difficulty_weights:
     code_length_tokens: 0.4
@@ -84,6 +91,8 @@ modal:
   reward_concurrency: 50
   reward_keep_warm: 1
   max_parallel_workers: 64
+  endpoint: ${oc.env:LLM3D_MODAL__ENDPOINT,}
+  auth_token: ${oc.env:LLM3D_MODAL__AUTH_TOKEN,}
   volume_name: "llm3d-data"
 
 metrics:
@@ -95,58 +104,8 @@ metrics:
   clip_model: "openai/clip-vit-large-patch14"
   clip_num_views: 4
 
-reward:
-  gate_empty: 0.0
-  gate_no_import: 0.0
-  gate_exec_fail: 0.05
-  gate_no_geometry: 0.10
-  gate_degenerate: 0.15
-  gate_metrics_fail: 0.15
-  gate_no_resemblance: 0.20
-  quality_floor: 0.30
-  quality_ceil: 1.0
-  f_score_target: 0.6
-  geometric_weight: 0.7
-  text_alignment_weight: 0.2
-  format_reward_weight: 0.1
-
 tinker:
   base_model: "Qwen/Qwen2.5-Coder-7B-Instruct"
-
-sft:
-  base_model: "Qwen/Qwen2.5-Coder-7B-Instruct"
-  lora_rank: 32
-  lora_alpha: 64
-  train_mlp: true
-  train_attn: true
-  train_unembed: true
-  epochs: 3
-  batch_size: 8
-  grad_accum_steps: 4
-  learning_rate: 1.0e-4
-  weight_decay: 0.01
-  warmup_steps: 100
-  max_seq_length: 32768
-  eval_every_n_steps: 500
-  eval_num_samples: 200
-  eval_temperature: 0.0
-  train_path: "datasets/sft_train.jsonl"
-  val_path: "datasets/sft_val.jsonl"
-
-rl:
-  algorithm: "grpo"
-  sft_checkpoint: "sft-epoch-2"
-  steps: 1000
-  batch_size: 16
-  num_completions: 8
-  learning_rate: 5.0e-6
-  kl_coeff: 0.05
-  clip_ratio: 0.2
-  temperature: 0.7
-  max_new_tokens: 4096
-  checkpoint_every: 100
-  log_every: 10
-  prompt_path: "datasets/rl_prompts.jsonl"
 
 eval:
   id_test_size: 1500

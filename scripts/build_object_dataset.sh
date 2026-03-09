@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build full object dataset: extract parts, fit code, assemble, render.
+# Phase 1b: Build SFT/RL/eval dataset splits from synthetic data.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -8,7 +8,7 @@ cd "$PROJECT_ROOT"
 
 CONFIG="${1:-configs/default.yaml}"
 
-echo "=== Building object dataset ==="
+echo "=== Building dataset splits ==="
 echo "Config: $CONFIG"
 echo ""
 
@@ -17,21 +17,21 @@ import logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s | %(levelname)s | %(message)s')
 
 from config import load_config
+from data.dataset_builder import build_datasets, save_splits
 
 cfg = load_config('$CONFIG')
-print(f'CD threshold: {cfg.quality_gate.cd_threshold}')
 
-# Step 1: Load MeshCoderDataset
-from datasets import load_dataset
-ds = load_dataset('InternRobotics/MeshCoderDataset')
-print(f'Train: {len(ds[\"train\"])} | Val: {len(ds[\"validation\"])} | Test: {len(ds[\"test\"])}')
-
-# Step 2: Build dataset splits
-from data.dataset_builder import build_datasets, save_splits
-splits = build_datasets(ds, f'{cfg.data_dir}/renders', cfg)
+splits = build_datasets(
+    synthetic_jsonl_path=cfg.synthetic_gen.output_path,
+    manifest_jsonl_path=f'{cfg.data_dir}/manifest.jsonl',
+    cfg=cfg,
+)
 save_splits(splits, f'{cfg.output_dir}/datasets')
+
+for name, split in splits.items():
+    print(f'  {name}: {len(split.samples)} samples')
 print('Dataset splits saved.')
 "
 
 echo ""
-echo "=== Object dataset build complete ==="
+echo "=== Dataset build complete ==="

@@ -21,18 +21,13 @@ Train a Vision-Language Model (Qwen2.5-VL-7B-Instruct) to generate executable Bl
 ## Project Structure
 
 ```
-bpy_lib/                   # Constrained Blender Python API library
-├── bpy_lib.py             # 8 function families (primitives, curves, booleans, etc.)
-└── tests/                 # Unit tests (run in Blender)
-
 data/                      # Data pipeline
 ├── dataset_preprocessor.py # Load meshes, render multi-view images, store to disk
-├── part_generator.py      # Synthetic part generation (~300K samples)
-├── part_fitter.py         # Fit bpy_lib code to part meshes (template matching)
-├── object_assembler.py    # Assemble parts into full object code
 ├── dataset_builder.py     # Build SFT/RL/eval datasets in Qwen2.5-VL chat format
-├── dataset_analyzer.py    # Inspect MeshCoderDataset (streaming, no full download)
-└── configs/categories.yaml
+├── caption_joiner.py      # Join Cap3D captions with Objaverse meshes
+├── objaverse_filter.py    # Filter Objaverse++ UIDs by quality
+├── hard_prompts.py        # Hard prompt tracking and sampling for RL
+└── synthetic_generator.py # Teacher LLM synthetic data generation
 
 modal_infra/               # Modal serverless functions
 ├── images.py              # Docker image definitions (Blender 4.2)
@@ -94,13 +89,7 @@ The config system (`config.py`) loads `dev.env` automatically via `load_config()
 
 ## Pipeline
 
-### Phase 1: Generate synthetic parts
-
-```bash
-./scripts/generate_parts.sh
-```
-
-### Phase 1.5: Preprocess — render multi-view images
+### Phase 1: Preprocess — render multi-view images
 
 ```bash
 ./scripts/preprocess_dataset.sh
@@ -150,7 +139,7 @@ All settings are managed through `config.py` with Pydantic models. Override via:
 
 ## Key Design Decisions
 
-- **bpy_lib API**: Constrained set of high-level Blender functions the model learns to use
+- **Free-form bpy codegen**: Model generates raw Blender Python (`import bpy`) — no constrained API
 - **Gated reward**: Discrete gates (0.0→0.05→0.10→0.15→0.20) + continuous quality (0.3→1.0)
 - **Modal execution**: Isolated Blender containers with 120s timeout per sample
 - **Curriculum SFT**: Easy→Medium→Hard ordering by part count and type complexity

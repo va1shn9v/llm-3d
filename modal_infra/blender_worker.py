@@ -1,11 +1,14 @@
 """
-Modal function: execute Blender Python code in an isolated container.
+Modal function: execute raw Blender Python code in an isolated container.
+
+Runs raw `import bpy` scripts in an isolated container. Sets EXPORT_PATH env var
+so scripts know where to write their output mesh. Auto-exports if the script
+doesn't write to EXPORT_PATH itself.
 """
 
 from __future__ import annotations
 
 import os
-import signal
 import subprocess
 import tempfile
 import time
@@ -19,27 +22,25 @@ app = modal.App("llm3d-blender-worker")
 
 _WRAPPER_TEMPLATE = """\
 import sys, os
-sys.path.insert(0, "/opt/bpy_lib")
-import bpy
 
-bpy.ops.wm.read_factory_settings(use_empty=True)
 os.environ["EXPORT_PATH"] = "{export_path}"
 
 # ===== BEGIN USER CODE =====
 {user_code}
 # ===== END USER CODE =====
 
-# Auto-export if user code didn't call export_scene()
+# Auto-export if user code didn't write to EXPORT_PATH
+import bpy as _bpy
 import os as _os
 if not _os.path.exists("{export_path}"):
     try:
-        mesh_objects = [o for o in bpy.data.objects if o.type == 'MESH']
+        mesh_objects = [o for o in _bpy.data.objects if o.type == 'MESH']
         if mesh_objects:
-            bpy.ops.object.select_all(action='DESELECT')
+            _bpy.ops.object.select_all(action='DESELECT')
             for o in mesh_objects:
                 o.select_set(True)
-            bpy.context.view_layer.objects.active = mesh_objects[0]
-            bpy.ops.wm.obj_export(
+            _bpy.context.view_layer.objects.active = mesh_objects[0]
+            _bpy.ops.wm.obj_export(
                 filepath="{export_path}",
                 export_selected_objects=True,
                 export_uv=False,
@@ -52,7 +53,7 @@ if not _os.path.exists("{export_path}"):
 
 @app.function(image=blender_image, cpu=2, memory=4096, timeout=150)
 def execute_blender_code(code: str, seed: int = 42) -> dict[str, Any]:
-    """Execute Blender Python code and return the exported mesh.
+    """Execute raw Blender Python code and return the exported mesh.
 
     Returns dict with keys: success, mesh_bytes, mesh_stats, error, elapsed.
     """
@@ -121,8 +122,9 @@ def execute_blender_code(code: str, seed: int = 42) -> dict[str, Any]:
 
 def _get_mesh_stats(mesh_bytes: bytes) -> dict:
     """Quick vertex/face count from raw OBJ bytes."""
-    import trimesh
     import io
+
+    import trimesh
 
     try:
         mesh = trimesh.load(io.BytesIO(mesh_bytes), file_type="obj", force="mesh", process=True)

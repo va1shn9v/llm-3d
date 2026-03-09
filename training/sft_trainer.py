@@ -1,7 +1,7 @@
 """
-SFT training loop on Tinker (Section 8.1 of spec).
+SFT training loop on Tinker.
 
-Trains Qwen2.5-VL-7B-Instruct with LoRA on the prepared SFT dataset.
+Trains Qwen2.5-Coder-7B-Instruct with LoRA on text-to-3D SFT dataset.
 Uses Tinker's async API for forward_backward and optim_step.
 """
 
@@ -57,7 +57,7 @@ def _messages_to_datum(
     messages: list[dict],
     tokenizer: Any,
 ) -> "tinker_types.Datum":
-    """Convert a chat-format message list into a Tinker Datum.
+    """Convert a text-only chat message list into a Tinker Datum.
 
     Prompt tokens (system + user turns) get weight 0; assistant tokens get weight 1.
     """
@@ -111,18 +111,13 @@ class SFTTrainer:
         self.wb.define_metric("sft/learning_rate", step_metric="step")
 
     async def train(self, service_client: Any = None):
-        """Run the full SFT training loop.
-
-        Parameters
-        ----------
-        service_client:
-            A ``tinker.ServiceClient``.  If *None*, runs in dry-run mode.
-        """
+        """Run the full SFT training loop."""
         sft = self.cfg.sft
 
         log.info(
             f"Starting SFT training: {sft.epochs} epochs, "
-            f"bs={sft.batch_size}, lr={sft.learning_rate}"
+            f"bs={sft.batch_size}, lr={sft.learning_rate}, "
+            f"model={sft.base_model}"
         )
 
         dataloader = SFTDataLoader(
@@ -230,8 +225,31 @@ class SFTTrainer:
         log.info(f"  eval placeholder: step={self._step}, epoch={self._epoch}")
 
 
-def run_sft(config_path: str | None = None):
-    """Entry point for SFT training."""
-    cfg = load_config(config_path)
+def run_sft(cfg: ProjectConfig | None = None):
+    """Entry point for SFT training.
+
+    When called programmatically, pass a ProjectConfig directly or ``None``
+    to use Pydantic defaults.  For CLI usage with overrides and sweeps,
+    run via ``python -m training.sft_trainer`` (Hydra handles config).
+    """
+    if cfg is None:
+        cfg = load_config()
     trainer = SFTTrainer(cfg)
     asyncio.run(trainer.train())
+
+
+if __name__ == "__main__":
+    import hydra
+    from omegaconf import DictConfig, OmegaConf
+
+    from configs.structured import register_configs
+
+    register_configs()
+
+    @hydra.main(config_path="../configs", config_name="config", version_base="1.3")
+    def _hydra_main(hydra_cfg: DictConfig) -> None:
+        raw = OmegaConf.to_container(hydra_cfg, resolve=True)
+        cfg = ProjectConfig(**raw)
+        run_sft(cfg)
+
+    _hydra_main()

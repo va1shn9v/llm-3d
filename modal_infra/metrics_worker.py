@@ -1,5 +1,5 @@
 """
-Modal function: compute geometric similarity metrics between two meshes.
+Modal function: compute geometric similarity metrics + CLIP text-3D alignment.
 """
 
 from __future__ import annotations
@@ -107,3 +107,54 @@ def compute_metrics(gen_mesh_bytes: bytes, gt_mesh_bytes: bytes,
         "normal_consistency": nc,
         "error": "",
     }
+
+
+@app.function(image=metrics_image, cpu=2, memory=4096, timeout=120)
+def compute_clip_score(
+    rendered_image_paths: list[str],
+    text: str,
+    model_name: str = "openai/clip-vit-large-patch14",
+) -> float:
+    """Compute CLIP cosine similarity between rendered mesh views and text.
+
+    Loads rendered images, encodes them with CLIP vision encoder, encodes the
+    text with CLIP text encoder, and returns the average cosine similarity.
+
+    Returns a score in [0, 1] (clamped).
+    """
+    import torch
+    from PIL import Image
+    from transformers import CLIPModel, CLIPProcessor
+
+    if not rendered_image_paths or not text:
+        return 0.0
+
+    processor = CLIPProcessor.from_pretrained(model_name)
+    model = CLIPModel.from_pretrained(model_name)
+    model.eval()
+
+    images = []
+    for path in rendered_image_paths:
+        try:
+            img = Image.open(path).convert("RGB")
+            images.append(img)
+        except Exception:
+            continue
+
+    if not images:
+        return 0.0
+
+    with torch.no_grad():
+        inputs = processor(text=[text], images=images, return_tensors="pt", padding=True)
+        outputs = model(**inputs)
+
+        image_embeds = outputs.image_embeds
+        text_embeds = outputs.text_embeds
+
+        image_embeds = image_embeds / image_embeds.norm(dim=-1, keepdim=True)
+        text_embeds = text_embeds / text_embeds.norm(dim=-1, keepdim=True)
+
+        similarities = (image_embeds @ text_embeds.T).squeeze(-1)
+        avg_sim = float(similarities.mean())
+
+    return max(0.0, min(1.0, (avg_sim + 1) / 2))

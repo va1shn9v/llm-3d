@@ -1,5 +1,5 @@
 """
-Modal Docker image definitions for Blender execution and metrics computation.
+Modal Docker image definitions for Blender execution, metrics, and CLIP scoring.
 """
 
 from __future__ import annotations
@@ -13,7 +13,7 @@ _bv = _cfg.modal.blender_version
 
 
 def make_blender_image() -> modal.Image:
-    """Blender 4.x image with bpy_lib baked in."""
+    """Blender 4.x image for raw bpy script execution."""
     return (
         modal.Image.debian_slim(python_version="3.11")
         .apt_install(
@@ -30,21 +30,21 @@ def make_blender_image() -> modal.Image:
             "rm /tmp/blender.tar.xz",
         )
         .pip_install("trimesh>=4.0", "numpy>=1.24", "scipy>=1.11")
-        .copy_local_file("bpy_lib/bpy_lib.py", "/opt/bpy_lib/bpy_lib.py")
-        .copy_local_file("bpy_lib/__init__.py", "/opt/bpy_lib/__init__.py")
-        .run_commands(
-            "PYVER=$(python3 -c 'import sys; print(f\"{sys.version_info.major}.{sys.version_info.minor}\")')"
-            " && echo 'import sys; sys.path.insert(0, \"/opt/bpy_lib\")'"
-            f" >> /opt/blender/{_bv[:3]}/python/lib/python$PYVER/site-packages/usercustomize.py"
-        )
     )
 
 
 def make_metrics_image() -> modal.Image:
-    """Lightweight image for mesh metrics computation (no Blender needed)."""
+    """Image for mesh metrics + CLIP scoring."""
     return (
         modal.Image.debian_slim(python_version="3.11")
-        .pip_install("trimesh>=4.0", "numpy>=1.24", "scipy>=1.11")
+        .pip_install(
+            "trimesh>=4.0",
+            "numpy>=1.24",
+            "scipy>=1.11",
+            "torch>=2.1",
+            "transformers>=4.36",
+            "pillow>=10.0",
+        )
     )
 
 

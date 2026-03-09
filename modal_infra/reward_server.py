@@ -56,7 +56,7 @@ def _compute_reward(
     if not code or not code.strip():
         return 0.0
 
-    if "from bpy_lib import" not in code and "import bpy" not in code:
+    if "import bpy" not in code:
         return 0.0
 
     if not exec_result.get("success", False):
@@ -83,13 +83,13 @@ def _compute_reward(
 def _format_reward(code: str) -> float:
     """Bonus for following expected code structure."""
     score = 0.0
-    if code.startswith("from bpy_lib import"):
+    if "import bpy" in code:
         score += 0.25
-    if "# object name:" in code:
+    if "bpy.ops.object.select_all" in code or "bpy.data.objects" in code:
         score += 0.25
-    if "# part_" in code:
+    if "EXPORT_PATH" in code:
         score += 0.25
-    if "export_scene()" in code:
+    if "bpy.ops.wm.obj_export" in code or "bpy.ops.export_scene" in code:
         score += 0.25
     return score
 

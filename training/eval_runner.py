@@ -114,7 +114,7 @@ class EvalRunner:
                 prompt = test_dataset.format_prompt({**item, "images": images})
                 code = await generate_fn(prompt)
             else:
-                code = "from bpy_lib import *\n# eval placeholder\nexport_scene()"
+                code = "import bpy\n# eval placeholder — no-op\n"
 
             exec_items = [{"object_id": item["object_id"], "code": code, "seed": 42}]
             exec_results = await self.harness.execute_batch(exec_items)
@@ -275,9 +275,32 @@ class EvalRunner:
         log.info(f"Saved {len(data)} aggregated results to {output_path}")
 
 
-def run_eval(config_path: str | None = None):
-    """Entry point for evaluation."""
-    cfg = load_config(config_path)
+def run_eval(cfg: ProjectConfig | None = None):
+    """Entry point for evaluation.
+
+    When called programmatically, pass a ProjectConfig directly or ``None``
+    to use Pydantic defaults.  For CLI usage with overrides and sweeps,
+    run via ``python -m training.eval_runner`` (Hydra handles config).
+    """
+    if cfg is None:
+        cfg = load_config()
     runner = EvalRunner(cfg)
     results = asyncio.run(runner.run_full_evaluation())
     runner.save_results(results, Path(cfg.output_dir) / "eval_results.json")
+
+
+if __name__ == "__main__":
+    import hydra
+    from omegaconf import DictConfig, OmegaConf
+
+    from configs.structured import register_configs
+
+    register_configs()
+
+    @hydra.main(config_path="../configs", config_name="config", version_base="1.3")
+    def _hydra_main(hydra_cfg: DictConfig) -> None:
+        raw = OmegaConf.to_container(hydra_cfg, resolve=True)
+        cfg = ProjectConfig(**raw)
+        run_eval(cfg)
+
+    _hydra_main()

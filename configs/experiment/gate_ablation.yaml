@@ -1,0 +1,14 @@
+# @package _global_
+
+# Ablation over gate thresholds to study their effect on RL signal.
+# Usage: python -m training.rl_trainer +experiment=gate_ablation --multirun
+
+defaults:
+  - override /rl: fast_iter
+
+hydra:
+  sweeper:
+    params:
+      reward.gate_exec_fail: "0.0,0.05,0.10"
+      reward.gate_no_geometry: "0.05,0.10,0.15"
+      reward.gate_no_resemblance: "0.10,0.20,0.30"

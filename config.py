@@ -1,14 +1,19 @@
 """
-Central configuration system using Pydantic models with YAML file loading.
+Central configuration system using Pydantic models.
 
 Provides typed, validated configuration for every component of the pipeline:
-bpy_lib, data generation, Modal infrastructure, training, and evaluation.
+data curation, synthetic generation, Modal infrastructure, training, and evaluation.
 
-Usage:
+CLI entry points use Hydra for config groups, overrides, and multirun sweeps::
+
+    python -m training.rl_trainer reward=geometry_heavy rl.learning_rate=1e-5
+    python -m training.rl_trainer --multirun reward.f_score_target=0.4,0.6,0.8
+
+For programmatic use::
+
     from config import load_config, ProjectConfig
-    cfg = load_config("configs/default.yaml")
-    # or with overrides:
-    cfg = load_config("configs/default.yaml", modal_endpoint="https://...")
+    cfg = load_config()                          # Pydantic defaults + env vars
+    cfg = load_config("configs/default.yaml")    # from YAML
 """
 
 from __future__ import annotations
@@ -25,7 +30,10 @@ _ENV_FILE = "dev.env"
 
 
 def _load_env_file(path: str | Path = _ENV_FILE) -> None:
-    """Load variables from an env file into os.environ (setdefault, won't overwrite)."""
+    """Load variables from an env file into ``os.environ`` (won't overwrite).
+
+    Keeps third-party SDKs (Tinker, Modal, W&B) working via their own env vars.
+    """
     p = Path(path)
     if not p.exists():
         return
@@ -44,14 +52,8 @@ def _load_env_file(path: str | Path = _ENV_FILE) -> None:
 # Sub-configs
 # ---------------------------------------------------------------------------
 
-class BpyLibConfig(BaseModel):
-    coordinate_range: float = 1.0
-    max_vertices_warn: int = 100_000
-    export_format: str = "obj"
-    default_export_path: str = "/tmp/generated_mesh.obj"
-
-
 class ViewConfig(BaseModel):
+    """Rendering config — used for CLIP eval rendering."""
     num_views: int = 4
     resolution: tuple[int, int] = (512, 512)
     engine: str = "CYCLES"
@@ -62,23 +64,46 @@ class ViewConfig(BaseModel):
     cycles_samples: int = 128
 
 
-class PartGeneratorConfig(BaseModel):
-    num_primitives: int = 50_000
-    num_translations: int = 100_000
-    num_bridge_loops: int = 50_000
-    num_booleans: int = 50_000
-    num_arrays: int = 50_000
-    min_faces: int = 4
-    cd_accept_threshold: float = 5e-3
-    modal_batch_size: int = 256
-    seed: int = 42
-
-
 class QualityGateConfig(BaseModel):
     min_faces: int = 4
     max_vertices: int = 100_000
-    cd_threshold: float = 5e-3
+    cd_threshold: float = 0.05
     min_f_score_005: float = 0.05
+
+
+class ObjaverseFilterConfig(BaseModel):
+    """Objaverse++ quality filtering."""
+    quality_tiers: list[str] = Field(default_factory=lambda: ["High", "Superior"])
+    exclude_scenes: bool = True
+    exclude_transparent: bool = True
+    max_uids: int | None = None
+    output_path: str = "datasets/filtered_uids.json"
+
+
+class SyntheticGenConfig(BaseModel):
+    """Teacher LLM synthetic data generation."""
+    teacher_model: str = "gpt-4o-mini"
+    teacher_provider: str = "openai"
+    temperature: float = 0.7
+    max_attempts_per_caption: int = 3
+    cd_threshold: float = 0.05
+    f_score_threshold: float = 0.1
+    min_faces: int = 4
+    max_vertices: int = 100_000
+    batch_size: int = 50
+    max_concurrent_blender: int = 32
+    output_path: str = "datasets/synthetic_sft.jsonl"
+    hard_prompts_path: str = "datasets/hard_prompts.csv"
+    checkpoint_path: str = "datasets/synthetic_checkpoint.json"
+
+
+class HardMiningConfig(BaseModel):
+    """Controls hard prompt sampling during RLVR."""
+    enabled: bool = True
+    hard_prompts_csv: str = "datasets/hard_prompts.csv"
+    hard_prompt_ratio: float = 0.4
+    min_failure_rate: float = 0.5
+    min_attempts: int = 2
 
 
 class DatasetConfig(BaseModel):
@@ -88,17 +113,18 @@ class DatasetConfig(BaseModel):
     eval_ood_ratio: float = 0.02
     curriculum: bool = True
     difficulty_weights: dict[str, float] = Field(default_factory=lambda: {
-        "num_parts": 0.4,
-        "code_length_tokens": 0.3,
-        "max_part_complexity": 0.3,
-    })
-    view_count_weights: dict[int, float] = Field(default_factory=lambda: {
-        1: 0.10, 2: 0.20, 3: 0.20, 4: 0.40, 6: 0.10,
+        "code_length_tokens": 0.4,
+        "vertex_count": 0.3,
+        "face_count": 0.3,
     })
     system_prompt: str = (
-        "You are a 3D modeling assistant. Given images of a 3D object, "
-        "generate Blender Python code using the bpy_lib API that reconstructs "
-        "the object. Output executable code only, no explanations."
+        "You are an expert Blender Python developer. Given a text description of a 3D object, "
+        "write a complete bpy script that creates the described geometry. Use standard bpy "
+        "operations (primitives, BMesh, modifiers, booleans, curves). The script must: "
+        "1. Start with `import bpy` and clear the default scene. "
+        "2. Create the geometry described. "
+        "3. Export the result to OBJ at the path from os.environ['EXPORT_PATH']. "
+        "Output only the Python code, no explanations."
     )
 
 
@@ -131,6 +157,8 @@ class MetricsConfig(BaseModel):
     f_score_thresholds: list[float] = Field(default_factory=lambda: [0.01, 0.05])
     hausdorff_percentile: float = 90.0
     voxel_grid_size: int = 32
+    clip_model: str = "openai/clip-vit-large-patch14"
+    clip_num_views: int = 4
 
 
 class RewardConfig(BaseModel):
@@ -144,16 +172,18 @@ class RewardConfig(BaseModel):
     quality_floor: float = 0.30
     quality_ceil: float = 1.0
     f_score_target: float = 0.6
+    geometric_weight: float = 0.7
+    text_alignment_weight: float = 0.2
     format_reward_weight: float = 0.1
 
 
 class TinkerConfig(BaseModel):
     """Tinker platform settings.  TINKER_API_KEY is read from env by the SDK."""
-    base_model: str = "Qwen/Qwen2.5-VL-7B-Instruct"
+    base_model: str = "Qwen/Qwen2.5-Coder-7B-Instruct"
 
 
 class SFTConfig(BaseModel):
-    base_model: str = "Qwen/Qwen2.5-VL-7B-Instruct"
+    base_model: str = "Qwen/Qwen2.5-Coder-7B-Instruct"
     lora_rank: int = 32
     lora_alpha: int = 64
     train_mlp: bool = True
@@ -186,6 +216,7 @@ class RLConfig(BaseModel):
     max_new_tokens: int = 4096
     checkpoint_every: int = 100
     log_every: int = 10
+    prompt_path: str = "datasets/rl_prompts.jsonl"
 
 
 class EvalConfig(BaseModel):
@@ -204,7 +235,7 @@ class EvalConfig(BaseModel):
 class LoggingConfig(BaseModel):
     level: str = "INFO"
     log_dir: str = "./logs"
-    wandb_project: str = "image-to-3d-rlvr"
+    wandb_project: str = "text-to-3d-rlvr"
     wandb_enabled: bool = False
 
 
@@ -221,10 +252,11 @@ class ProjectConfig(BaseSettings):
     data_dir: str = "./data"
     blender_path: str = "blender"
 
-    bpy_lib: BpyLibConfig = Field(default_factory=BpyLibConfig)
     views: ViewConfig = Field(default_factory=ViewConfig)
-    part_generator: PartGeneratorConfig = Field(default_factory=PartGeneratorConfig)
     quality_gate: QualityGateConfig = Field(default_factory=QualityGateConfig)
+    objaverse_filter: ObjaverseFilterConfig = Field(default_factory=ObjaverseFilterConfig)
+    synthetic_gen: SyntheticGenConfig = Field(default_factory=SyntheticGenConfig)
+    hard_mining: HardMiningConfig = Field(default_factory=HardMiningConfig)
     dataset: DatasetConfig = Field(default_factory=DatasetConfig)
     modal: ModalConfig = Field(default_factory=ModalConfig)
     metrics: MetricsConfig = Field(default_factory=MetricsConfig)
@@ -246,31 +278,18 @@ class ProjectConfig(BaseSettings):
 # Loading helpers
 # ---------------------------------------------------------------------------
 
-def _deep_merge(base: dict, override: dict) -> dict:
-    """Recursively merge override into base dict."""
-    merged = base.copy()
-    for k, v in override.items():
-        if k in merged and isinstance(merged[k], dict) and isinstance(v, dict):
-            merged[k] = _deep_merge(merged[k], v)
-        else:
-            merged[k] = v
-    return merged
-
-
 def load_config(
     yaml_path: str | Path | None = None,
-    env_file: str | Path = _ENV_FILE,
     **overrides: Any,
 ) -> ProjectConfig:
-    """Load configuration from optional YAML file with programmatic overrides.
+    """Build a ``ProjectConfig`` from optional YAML + keyword overrides.
 
-    Precedence (highest wins): overrides > YAML > env vars > defaults.
+    For CLI usage with config groups, overrides, and multirun sweeps, prefer
+    the Hydra entry points (``python -m training.rl_trainer ...``).
 
-    The *env_file* (default ``dev.env``) is loaded into ``os.environ`` first so
-    that both pydantic-settings and third-party SDKs (Tinker, Modal, W&B) can
-    pick up their keys automatically.
+    This function remains available for programmatic and data-pipeline use.
     """
-    _load_env_file(env_file)
+    _load_env_file()
 
     data: dict = {}
 
@@ -281,6 +300,6 @@ def load_config(
                 data = yaml.safe_load(f) or {}
 
     if overrides:
-        data = _deep_merge(data, overrides)
+        data.update(overrides)
 
     return ProjectConfig(**data)
