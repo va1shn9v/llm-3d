@@ -156,7 +156,6 @@ class MetricsConfig(BaseModel):
     num_sample_points_eval: int = 100_000
     f_score_thresholds: list[float] = Field(default_factory=lambda: [0.01, 0.05])
     hausdorff_percentile: float = 90.0
-    voxel_grid_size: int = 32
     clip_model: str = "openai/clip-vit-large-patch14"
     clip_num_views: int = 4
 
@@ -227,7 +226,6 @@ class EvalConfig(BaseModel):
     unseen_categories: list[str] = Field(default_factory=lambda: [
         "fork", "spoon", "tv", "window", "door",
     ])
-    view_counts: list[int] = Field(default_factory=lambda: [1, 2, 3, 4, 6])
     temperature: float = 0.0
     bootstrap_samples: int = 10_000
 

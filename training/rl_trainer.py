@@ -28,7 +28,6 @@ except ImportError:
 from config import ProjectConfig, load_config
 from data.hard_prompts import HardPromptSampler
 from environments.blender_3d.harness import Blender3DHarness
-from environments.blender_3d.rubric import Blender3DRubric
 from training.wandb_logger import WandbLogger
 
 log = logging.getLogger(__name__)
@@ -138,7 +137,6 @@ class GRPOTrainer:
             modal_endpoint=self.cfg.modal.endpoint,
             auth_token=self.cfg.modal.auth_token,
         )
-        self.rubric = Blender3DRubric(self.cfg.reward)
         self.wb = WandbLogger(
             self.cfg.logging,
             run_name="grpo",

@@ -1,7 +1,7 @@
 """
 Evaluation pipeline (Section 9 of spec).
 
-Runs all experimental conditions across test sets and view counts.
+Runs all experimental conditions across test sets.
 Computes full metrics with confidence intervals via paired bootstrap.
 """
 
@@ -27,9 +27,7 @@ log = logging.getLogger(__name__)
 @dataclass
 class EvalResult:
     object_id: str
-    category: str
     condition: str
-    num_views: int
     success: bool
     has_geometry: bool
     metrics: dict[str, float] = field(default_factory=dict)
@@ -42,7 +40,6 @@ class EvalResult:
 class AggregatedMetrics:
     condition: str
     test_set: str
-    num_views: int | str
     n_total: int
     execution_rate: float
     geometry_rate: float
@@ -61,23 +58,20 @@ def bootstrap_ci(
     alpha: float = 0.05,
     seed: int = 42,
 ) -> tuple[float, float]:
-    """Compute bootstrap confidence interval."""
+    """Compute bootstrap confidence interval (vectorized)."""
     if not values:
         return (0.0, 0.0)
     rng = np.random.default_rng(seed)
     arr = np.array(values)
-    means = []
-    for _ in range(n_bootstrap):
-        sample = rng.choice(arr, size=len(arr), replace=True)
-        means.append(float(sample.mean()))
-    means.sort()
-    lo = means[int(n_bootstrap * alpha / 2)]
-    hi = means[int(n_bootstrap * (1 - alpha / 2))]
+    samples = rng.choice(arr, size=(n_bootstrap, len(arr)), replace=True)
+    means = np.sort(samples.mean(axis=1))
+    lo = float(means[int(n_bootstrap * alpha / 2)])
+    hi = float(means[int(n_bootstrap * (1 - alpha / 2))])
     return (round(lo, 6), round(hi, 6))
 
 
 class EvalRunner:
-    """Run full evaluation across conditions, test sets, and view counts."""
+    """Run full evaluation across conditions and test sets."""
 
     def __init__(self, cfg: ProjectConfig | None = None):
         self.cfg = cfg or load_config()
@@ -96,10 +90,9 @@ class EvalRunner:
         self,
         condition: str,
         test_dataset: Blender3DDataset,
-        num_views: int,
         generate_fn: Any = None,
     ) -> list[EvalResult]:
-        """Evaluate a single condition on a test set with given view count.
+        """Evaluate a single condition on a test set.
 
         generate_fn: async callable that takes messages and returns code string.
                      If None, uses a placeholder.
@@ -108,10 +101,9 @@ class EvalRunner:
 
         for i in range(len(test_dataset)):
             item = test_dataset[i]
-            images = item["images"][:num_views]
 
             if generate_fn is not None:
-                prompt = test_dataset.format_prompt({**item, "images": images})
+                prompt = test_dataset.format_prompt(item)
                 code = await generate_fn(prompt)
             else:
                 code = "import bpy\n# eval placeholder — no-op\n"
@@ -126,9 +118,7 @@ class EvalRunner:
 
             results.append(EvalResult(
                 object_id=item["object_id"],
-                category=item["category"],
                 condition=condition,
-                num_views=num_views,
                 success=success,
                 has_geometry=has_geom,
                 metrics=metrics,
@@ -144,13 +134,12 @@ class EvalRunner:
         results: list[EvalResult],
         condition: str,
         test_set: str,
-        num_views: int | str = "all",
     ) -> AggregatedMetrics:
         """Aggregate results into summary metrics with CIs."""
         n = len(results)
         if n == 0:
             return AggregatedMetrics(
-                condition=condition, test_set=test_set, num_views=num_views,
+                condition=condition, test_set=test_set,
                 n_total=0, execution_rate=0, geometry_rate=0,
                 mean_f_score_005=0, mean_chamfer=0, mean_hausdorff_90=0,
                 mean_normal_consistency=0, mean_reward=0,
@@ -172,7 +161,6 @@ class EvalRunner:
         return AggregatedMetrics(
             condition=condition,
             test_set=test_set,
-            num_views=num_views,
             n_total=n,
             execution_rate=round(exec_rate, 4),
             geometry_rate=round(geom_rate, 4),
@@ -214,30 +202,29 @@ class EvalRunner:
             dataset = Blender3DDataset(ts_path)
 
             for cond_name, gen_fn in conditions.items():
-                for nv in self.cfg.eval.view_counts:
-                    log.info(f"Evaluating {cond_name} on {ts_name} with {nv} views...")
-                    results = await self.evaluate_condition(cond_name, dataset, nv, gen_fn)
-                    agg = self.aggregate(results, cond_name, ts_name, nv)
-                    all_agg.append(agg)
+                log.info(f"Evaluating {cond_name} on {ts_name}...")
+                results = await self.evaluate_condition(cond_name, dataset, gen_fn)
+                agg = self.aggregate(results, cond_name, ts_name)
+                all_agg.append(agg)
 
-                    prefix = f"eval/{cond_name}/{ts_name}/{nv}v"
-                    self.wb.log({
-                        f"{prefix}/execution_rate": agg.execution_rate,
-                        f"{prefix}/geometry_rate": agg.geometry_rate,
-                        f"{prefix}/f_score_005": agg.mean_f_score_005,
-                        f"{prefix}/chamfer": agg.mean_chamfer,
-                        f"{prefix}/hausdorff_90": agg.mean_hausdorff_90,
-                        f"{prefix}/normal_consistency": agg.mean_normal_consistency,
-                        f"{prefix}/reward": agg.mean_reward,
-                    })
+                prefix = f"eval/{cond_name}/{ts_name}"
+                self.wb.log({
+                    f"{prefix}/execution_rate": agg.execution_rate,
+                    f"{prefix}/geometry_rate": agg.geometry_rate,
+                    f"{prefix}/f_score_005": agg.mean_f_score_005,
+                    f"{prefix}/chamfer": agg.mean_chamfer,
+                    f"{prefix}/hausdorff_90": agg.mean_hausdorff_90,
+                    f"{prefix}/normal_consistency": agg.mean_normal_consistency,
+                    f"{prefix}/reward": agg.mean_reward,
+                })
 
-                    log.info(
-                        f"  {cond_name}/{ts_name}/{nv}v: "
-                        f"exec={agg.execution_rate:.2f} "
-                        f"f005={agg.mean_f_score_005:.3f} "
-                        f"cd={agg.mean_chamfer:.5f} "
-                        f"reward={agg.mean_reward:.3f}"
-                    )
+                log.info(
+                    f"  {cond_name}/{ts_name}: "
+                    f"exec={agg.execution_rate:.2f} "
+                    f"f005={agg.mean_f_score_005:.3f} "
+                    f"cd={agg.mean_chamfer:.5f} "
+                    f"reward={agg.mean_reward:.3f}"
+                )
 
         self.wb.finish()
         return all_agg
@@ -256,7 +243,6 @@ class EvalRunner:
             data.append({
                 "condition": a.condition,
                 "test_set": a.test_set,
-                "num_views": a.num_views,
                 "n_total": a.n_total,
                 "execution_rate": a.execution_rate,
                 "geometry_rate": a.geometry_rate,

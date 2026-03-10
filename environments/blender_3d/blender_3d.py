@@ -1,5 +1,5 @@
 """
-Blender3DEnvironment — complete environment: Dataset + Harness + Rubric.
+Blender3DEnvironment — complete environment: Dataset + Harness.
 
 Provides the standard interface expected by training frameworks.
 """
@@ -8,18 +8,18 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Any
 
 from config import ProjectConfig, load_config
 from environments.blender_3d.dataset import Blender3DDataset
 from environments.blender_3d.harness import Blender3DHarness
-from environments.blender_3d.rubric import Blender3DRubric
 
 log = logging.getLogger(__name__)
 
 
 class Blender3DEnvironment:
-    """Complete environment: Dataset + Harness + Rubric.
+    """Complete environment: Dataset + Harness.
+
+    Rewards are computed server-side by the Modal reward API.
 
     Usage:
         env = Blender3DEnvironment(
@@ -28,21 +28,17 @@ class Blender3DEnvironment:
             auth_token="...",
         )
 
-        # For RL training:
         for batch in env.iter_batches(batch_size=16):
             prompts = [env.dataset.format_prompt(item) for item in batch]
             completions = model.generate(prompts)
-            exec_results = await env.harness.execute_batch(completions)
-            rewards = env.rubric.score_batch(exec_results)
+            rewards = await env.step(completions)
     """
 
     def __init__(
         self,
         dataset_path: str | Path | None = None,
-        images_base_dir: str | Path = ".",
         modal_endpoint: str | None = None,
         auth_token: str = "",
-        num_views: int = 4,
         cfg: ProjectConfig | None = None,
     ):
         if cfg is None:
@@ -52,16 +48,11 @@ class Blender3DEnvironment:
         ep = modal_endpoint or cfg.modal.endpoint
         tk = auth_token or cfg.modal.auth_token
 
-        self.dataset = Blender3DDataset(
-            jsonl_path=dp,
-            images_base_dir=images_base_dir,
-            num_views=num_views,
-        )
+        self.dataset = Blender3DDataset(jsonl_path=dp)
         self.harness = Blender3DHarness(
             modal_endpoint=ep,
             auth_token=tk,
         )
-        self.rubric = Blender3DRubric(cfg.reward)
         self.cfg = cfg
 
     def __len__(self) -> int:
@@ -82,10 +73,9 @@ class Blender3DEnvironment:
         self,
         completions: list[dict[str, str]],
     ) -> list[float]:
-        """Execute completions and return rewards.
+        """Execute completions and return server-computed rewards.
 
         completions: [{"object_id": str, "code": str}]
         """
         exec_results = await self.harness.execute_batch(completions)
-        rewards = self.rubric.score_batch(exec_results)
-        return rewards
+        return [r.get("reward", 0.0) for r in exec_results]

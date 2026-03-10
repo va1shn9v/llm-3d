@@ -100,7 +100,6 @@ metrics:
   num_sample_points_eval: 100000
   f_score_thresholds: [0.01, 0.05]
   hausdorff_percentile: 90.0
-  voxel_grid_size: 32
   clip_model: "openai/clip-vit-large-patch14"
   clip_num_views: 4
 
@@ -118,7 +117,6 @@ eval:
     - tv
     - window
     - door
-  view_counts: [1, 2, 3, 4, 6]
   temperature: 0.0
   bootstrap_samples: 10000
 

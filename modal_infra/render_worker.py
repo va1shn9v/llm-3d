@@ -4,11 +4,8 @@ Modal function: render multi-view images of a mesh using Blender.
 
 from __future__ import annotations
 
-import io
-import math
 import os
 import tempfile
-from typing import Any
 
 import modal
 
@@ -143,9 +140,9 @@ def render_mesh_views(
             "camera_distance": camera_distance,
         })
 
-        proc = subprocess.run(
+        subprocess.run(
             ["blender", "--background", "--python", script_path, "--", args_json],
-            capture_output=True, text=True, timeout=240,
+            capture_output=True, text=True, timeout=240, check=False,
         )
 
         images: list[bytes] = []

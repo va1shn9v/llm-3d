@@ -64,24 +64,3 @@ class Blender3DHarness:
                         for item in items
                     ]
 
-    async def execute_single(self, object_id: str, code: str, seed: int = 42) -> dict[str, Any]:
-        """Execute a single code sample (for debugging)."""
-        payload = {"object_id": object_id, "code": code, "seed": seed}
-        params = {"token": self.token} if self.token else {}
-
-        try:
-            async with httpx.AsyncClient(timeout=self.timeout) as client:
-                resp = await client.post(
-                    f"{self.endpoint}/reward/single",
-                    json=payload,
-                    params=params,
-                )
-                resp.raise_for_status()
-                return resp.json()
-        except Exception as e:
-            log.error(f"Single exec failed: {e}")
-            return {"reward": 0.0, "success": False, "error": str(e)}
-
-    def execute_batch_sync(self, items: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        """Synchronous wrapper for execute_batch."""
-        return asyncio.run(self.execute_batch(items))
