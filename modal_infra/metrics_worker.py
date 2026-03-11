@@ -9,12 +9,19 @@ from typing import Any
 
 import modal
 
-try:
-    from modal_infra.images import metrics_image
-except ModuleNotFoundError:
-    from images import metrics_image
-
 app = modal.App("llm3d-metrics-worker")
+
+metrics_image = (
+    modal.Image.debian_slim(python_version="3.11")
+    .pip_install(
+        "trimesh>=4.0",
+        "numpy>=1.24",
+        "scipy>=1.11",
+        "torch>=2.1",
+        "transformers>=4.36",
+        "pillow>=10.0",
+    )
+)
 
 
 def _normalize_mesh(mesh):

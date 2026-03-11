@@ -20,18 +20,30 @@ import time
 import modal
 from modal import asgi_app
 
-try:
-    from modal_infra.images import blender_image
-    from modal_infra.blender_worker import execute_blender_code
-    from modal_infra.metrics_worker import compute_metrics
-    from modal_infra.render_worker import render_mesh_views
-except ModuleNotFoundError:
-    from images import blender_image
-    from blender_worker import execute_blender_code
-    from metrics_worker import compute_metrics
-    from render_worker import render_mesh_views
-
 app = modal.App("llm3d-reward-api")
+
+_BV = os.environ.get("BLENDER_VERSION", "4.2.0")
+blender_image = (
+    modal.Image.debian_slim(python_version="3.11")
+    .apt_install(
+        "wget", "xz-utils", "libxi6", "libxxf86vm1", "libxfixes3",
+        "libxrender1", "libgl1-mesa-glx", "libglib2.0-0", "libsm6",
+        "libxext6", "libgomp1",
+    )
+    .run_commands(
+        f"wget -q https://download.blender.org/release/Blender{_BV[:3]}/"
+        f"blender-{_BV}-linux-x64.tar.xz -O /tmp/blender.tar.xz",
+        "mkdir -p /opt/blender && tar xf /tmp/blender.tar.xz"
+        " --strip-components=1 -C /opt/blender",
+        "ln -s /opt/blender/blender /usr/local/bin/blender",
+        "rm /tmp/blender.tar.xz",
+    )
+    .pip_install("trimesh>=4.0", "numpy>=1.24", "scipy>=1.11")
+)
+
+execute_blender_code = modal.Function.from_name("llm3d-blender-worker", "execute_blender_code")
+compute_metrics = modal.Function.from_name("llm3d-metrics-worker", "compute_metrics")
+render_mesh_views = modal.Function.from_name("llm3d-render-worker", "render_mesh_views")
 volume = modal.Volume.from_name("llm3d-data", create_if_missing=True)
 
 _START_TIME = time.time()

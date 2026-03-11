@@ -9,12 +9,26 @@ import tempfile
 
 import modal
 
-try:
-    from modal_infra.images import blender_gpu_image
-except ModuleNotFoundError:
-    from images import blender_gpu_image
-
 app = modal.App("llm3d-render-worker")
+
+_BV = os.environ.get("BLENDER_VERSION", "4.2.0")
+blender_gpu_image = (
+    modal.Image.from_registry("nvidia/cuda:12.2.0-runtime-ubuntu22.04", add_python="3.11")
+    .apt_install(
+        "wget", "xz-utils", "libxi6", "libxxf86vm1", "libxfixes3",
+        "libxrender1", "libgl1-mesa-glx", "libglib2.0-0", "libsm6",
+        "libxext6", "libgomp1",
+    )
+    .run_commands(
+        f"wget -q https://download.blender.org/release/Blender{_BV[:3]}/"
+        f"blender-{_BV}-linux-x64.tar.xz -O /tmp/blender.tar.xz",
+        "mkdir -p /opt/blender && tar xf /tmp/blender.tar.xz"
+        " --strip-components=1 -C /opt/blender",
+        "ln -s /opt/blender/blender /usr/local/bin/blender",
+        "rm /tmp/blender.tar.xz",
+    )
+    .pip_install("trimesh>=4.0", "numpy>=1.24", "scipy>=1.11")
+)
 volume = modal.Volume.from_name("llm3d-data", create_if_missing=True)
 
 _RENDER_SCRIPT = """\
