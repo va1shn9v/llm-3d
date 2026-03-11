@@ -24,7 +24,7 @@ blender_image = (
     .apt_install(
         "wget", "xz-utils", "libxi6", "libxxf86vm1", "libxfixes3",
         "libxrender1", "libgl1-mesa-glx", "libglib2.0-0", "libsm6",
-        "libxext6", "libgomp1",
+        "libxext6", "libgomp1", "libxkbcommon0",
     )
     .run_commands(
         f"wget -q https://download.blender.org/release/Blender{_BV[:3]}/"
@@ -42,6 +42,37 @@ _WRAPPER_TEMPLATE = """\
 import sys, os
 
 os.environ["EXPORT_PATH"] = "{export_path}"
+
+# ===== BLENDER 4.x COMPATIBILITY SHIM =====
+import bpy as _bpy_shim
+
+# Patch out use_auto_smooth (removed in Blender 4.0+)
+_OrigMeshType = type(_bpy_shim.data.meshes.new("__probe"))
+_bpy_shim.data.meshes.remove(_bpy_shim.data.meshes["__probe"])
+
+if not hasattr(_OrigMeshType, "use_auto_smooth"):
+    _OrigMeshType.use_auto_smooth = property(lambda self: False, lambda self, v: None)
+    _OrigMeshType.auto_smooth_angle = property(lambda self: 0.0, lambda self, v: None)
+
+# Patch legacy OBJ export operator if missing
+if not hasattr(_bpy_shim.ops.export_scene, "obj"):
+    import types as _types
+    def _legacy_obj_export(**kw):
+        filepath = kw.pop("filepath", kw.pop("path", ""))
+        use_selection = kw.pop("use_selection", False)
+        return _bpy_shim.ops.wm.obj_export(
+            filepath=filepath,
+            export_selected_objects=use_selection,
+        )
+    _bpy_shim.ops.export_scene.obj = _legacy_obj_export
+
+# Ensure mathutils is accessible as bpy.mathutils for broken scripts
+import mathutils as _mathutils_mod
+if not hasattr(_bpy_shim, "mathutils"):
+    _bpy_shim.mathutils = _mathutils_mod
+
+del _OrigMeshType, _bpy_shim
+# ===== END COMPATIBILITY SHIM =====
 
 # ===== BEGIN USER CODE =====
 {user_code}

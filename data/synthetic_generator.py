@@ -18,6 +18,7 @@ import asyncio
 import json
 import logging
 import signal
+import time
 from pathlib import Path
 from typing import Any
 
@@ -25,16 +26,49 @@ from config import ProjectConfig, load_config
 from data.hard_prompts import HardPromptTracker
 
 log = logging.getLogger(__name__)
+_debug_log = logging.getLogger("synthetic_debug")
 
 _SENTINEL = None
 
+
+def _setup_debug_log(output_path: str | Path) -> None:
+    """Configure a file handler that captures extracted code, failures, and worker events."""
+    log_path = Path(output_path).parent / "generation_debug.log"
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+
+    if _debug_log.handlers:
+        return
+
+    fh = logging.FileHandler(log_path, mode="w", encoding="utf-8")
+    fh.setLevel(logging.DEBUG)
+    fh.setFormatter(logging.Formatter(
+        "%(asctime)s | %(levelname)s | %(message)s",
+    ))
+    _debug_log.setLevel(logging.DEBUG)
+    _debug_log.addHandler(fh)
+    _debug_log.propagate = False
+    log.info("Debug log: %s", log_path)
+
 _TEACHER_SYSTEM_PROMPT = """\
-You are an expert Blender Python developer. Write a complete bpy script \
-that creates the described 3D object. Use standard bpy operations (primitives, \
-BMesh, modifiers, booleans, curves). The script must:
+You are an expert Blender Python developer targeting Blender 4.2. Write a \
+complete bpy script that creates the described 3D object. Use standard bpy \
+operations (primitives, BMesh, modifiers, booleans, curves). The script must:
 1. Start with `import bpy` and clear the default scene
 2. Create the geometry described
 3. Export the result to OBJ at the path from os.environ["EXPORT_PATH"]
+
+CRITICAL API RULES for Blender 4.2:
+- use_auto_smooth is REMOVED. Do NOT set obj.data.use_auto_smooth or \
+obj.data.auto_smooth_angle. For angle-based smooth shading, add a \
+"Smooth by Angle" modifier: obj.modifiers.new("SmoothAngle", 'SMOOTH').
+- OBJ export: use bpy.ops.wm.obj_export(filepath=...), NOT \
+bpy.ops.export_scene.obj() which no longer exists.
+- mathutils is a top-level module. Use `from mathutils import Vector`, \
+NEVER `bpy.mathutils`.
+- After bpy.ops.object.join(), all source object references are invalid. \
+Re-acquire via bpy.context.active_object and do NOT reuse old variables.
+- After bpy.data.objects.remove(obj), do NOT reference that obj again.
+
 Output only the Python code, no explanations."""
 
 _TEACHER_USER_TEMPLATE = "Create a 3D model of: {caption}"
@@ -96,6 +130,8 @@ class SyntheticGenerator:
         self._checkpoint: dict[str, Any] = {}
         self._load_checkpoint()
 
+        _setup_debug_log(self.gen_cfg.output_path)
+
         self._tracker_lock = asyncio.Lock()
         self._output_lock = asyncio.Lock()
         self._checkpoint_lock = asyncio.Lock()
@@ -140,7 +176,7 @@ class SyntheticGenerator:
             ],
             n=self.gen_cfg.samples_per_caption,
             temperature=self.gen_cfg.temperature,
-            max_tokens=4096,
+            max_completion_tokens=16000,
         )
         codes: list[str] = []
         for choice in resp.choices:
@@ -204,6 +240,9 @@ class SyntheticGenerator:
         completed_uids: set[str],
     ):
         """Producer: call teacher LLM for each entry, push codes into queue."""
+        task_name = asyncio.current_task().get_name() if asyncio.current_task() else "producer"
+        _debug_log.info("[%s] started — %d entries assigned", task_name, len(entries))
+
         for entry in entries:
             if self._shutting_down:
                 break
@@ -214,11 +253,14 @@ class SyntheticGenerator:
             if uid in completed_uids:
                 continue
 
+            _debug_log.info("[%s] calling teacher LLM for uid=%s caption=%r", task_name, uid, caption)
+
             try:
                 async with llm_sem:
                     codes = await self._call_teacher_batch(client, caption)
             except Exception:
                 log.warning("Teacher call failed for %s", uid, exc_info=True)
+                _debug_log.error("[%s] teacher LLM call FAILED for uid=%s", task_name, uid, exc_info=True)
                 async with self._tracker_lock:
                     self.tracker.record_attempt(
                         uid, caption, success=False,
@@ -227,6 +269,7 @@ class SyntheticGenerator:
                 continue
 
             if not codes:
+                _debug_log.warning("[%s] no code extracted for uid=%s — empty_response", task_name, uid)
                 async with self._tracker_lock:
                     self.tracker.record_attempt(
                         uid, caption, success=False,
@@ -234,8 +277,15 @@ class SyntheticGenerator:
                     )
                 continue
 
-            for code in codes:
+            for idx, code in enumerate(codes):
+                _debug_log.info(
+                    "[%s] EXTRACTED CODE uid=%s sample=%d/%d\n"
+                    "--- BEGIN CODE ---\n%s\n--- END CODE ---",
+                    task_name, uid, idx + 1, len(codes), code,
+                )
                 await queue.put((uid, caption, code, gt_mesh_path))
+
+        _debug_log.info("[%s] finished", task_name)
 
     async def _consume(
         self,
@@ -246,19 +296,31 @@ class SyntheticGenerator:
         progress: dict[str, int],
     ):
         """Consumer: pull codes, execute in Modal, validate, track results."""
+        task_name = asyncio.current_task().get_name() if asyncio.current_task() else "consumer"
+        _debug_log.info("[%s] started — waiting for work items", task_name)
+
         while True:
             item = await queue.get()
             if item is _SENTINEL:
                 await queue.put(_SENTINEL)
+                _debug_log.info("[%s] received sentinel — shutting down", task_name)
                 break
 
             uid, caption, code, gt_mesh_path = item
+            t0 = time.monotonic()
+            _debug_log.info("[%s] executing Blender for uid=%s", task_name, uid)
 
             try:
                 async with blender_sem:
                     result = await self._execute_and_validate_async(code, gt_mesh_path)
             except Exception:
+                elapsed = time.monotonic() - t0
                 log.warning("Execution failed for %s", uid, exc_info=True)
+                _debug_log.error(
+                    "[%s] INFRA ERROR uid=%s elapsed=%.1fs\n%s",
+                    task_name, uid, elapsed,
+                    "Modal execution raised an exception — see main log for traceback",
+                )
                 async with self._tracker_lock:
                     self.tracker.record_attempt(
                         uid, caption, success=False,
@@ -267,6 +329,7 @@ class SyntheticGenerator:
                 queue.task_done()
                 continue
 
+            elapsed = time.monotonic() - t0
             metrics = result.get("metrics", {})
             cd = metrics.get("chamfer", float("inf"))
             f_score = metrics.get("f_score_005", 0.0)
@@ -284,7 +347,27 @@ class SyntheticGenerator:
                     error_type=error_type, gt_mesh_path=gt_mesh_path,
                 )
 
-            if passed:
+            if not passed:
+                _debug_log.warning(
+                    "[%s] VALIDATION FAILED uid=%s elapsed=%.1fs\n"
+                    "  success=%s  error_type=%s\n"
+                    "  error=%s\n"
+                    "  mesh_stats=%s\n"
+                    "  chamfer=%.6f  f_score=%.6f  (thresholds: cd<%.4f f>%.4f)\n"
+                    "  caption=%r",
+                    task_name, uid, elapsed,
+                    result.get("success"), error_type,
+                    result.get("error", "")[:500],
+                    result.get("mesh_stats"),
+                    cd, f_score,
+                    self.gen_cfg.cd_threshold, self.gen_cfg.f_score_threshold,
+                    caption,
+                )
+            else:
+                _debug_log.info(
+                    "[%s] VALIDATION PASSED uid=%s elapsed=%.1fs cd=%.6f f_score=%.6f",
+                    task_name, uid, elapsed, cd, f_score,
+                )
                 mesh_bytes = result.get("mesh_bytes")
 
                 async with self._best_lock:
