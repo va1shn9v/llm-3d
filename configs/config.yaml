@@ -27,9 +27,9 @@ quality_gate:
   min_f_score_005: 0.05
 
 objaverse_filter:
-  quality_tiers: ["High", "Superior"]
-  exclude_scenes: true
-  exclude_transparent: true
+  min_face_count: 100
+  max_vertex_count: 500000
+  exclude_animated: true
   max_uids: null
   output_path: "datasets/filtered_uids.json"
 

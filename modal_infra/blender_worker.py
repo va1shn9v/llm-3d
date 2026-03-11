@@ -19,6 +19,7 @@ import modal
 from modal_infra.images import blender_image
 
 app = modal.App("llm3d-blender-worker")
+volume = modal.Volume.from_name("llm3d-data", create_if_missing=True)
 
 _WRAPPER_TEMPLATE = """\
 import sys, os
@@ -51,7 +52,7 @@ if not _os.path.exists("{export_path}"):
 """
 
 
-@app.function(image=blender_image, cpu=2, memory=4096, timeout=150)
+@app.function(image=blender_image, cpu=2, memory=4096, timeout=150)  # keep in sync with ModalConfig
 def execute_blender_code(code: str, seed: int = 42) -> dict[str, Any]:
     """Execute raw Blender Python code and return the exported mesh.
 
@@ -118,6 +119,60 @@ def execute_blender_code(code: str, seed: int = 42) -> dict[str, Any]:
             "error": "",
             "elapsed": time.monotonic() - t0,
         }
+
+
+@app.function(image=blender_image, volumes={"/data": volume}, timeout=30)
+def store_mesh_artifact(uid: str, mesh_bytes: bytes, subdir: str = "synthetic") -> str:
+    """Persist a validated mesh to the Modal Volume for downstream reuse."""
+    path = f"/data/{subdir}/{uid}.obj"
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "wb") as f:
+        f.write(mesh_bytes)
+    volume.commit()
+    return path
+
+
+_sync_image = modal.Image.debian_slim(python_version="3.11").pip_install(
+    "huggingface_hub>=1.5.0",
+)
+
+
+@app.function(image=_sync_image, volumes={"/data": volume}, timeout=600, cpu=2, memory=4096)
+def sync_from_hf_bucket(
+    hf_bucket_path: str,
+    volume_subdir: str = "meshes",
+) -> int:
+    """Pull files from an HF Bucket into the Modal Volume.
+
+    Args:
+        hf_bucket_path: Full ``hf://buckets/...`` path to sync from.
+        volume_subdir: Subdirectory under ``/data`` on the volume.
+
+    Returns:
+        Number of files synced.
+    """
+    import os
+    import shutil
+
+    from huggingface_hub import HfFileSystem
+
+    hffs = HfFileSystem()
+    dest_root = f"/data/{volume_subdir}"
+    os.makedirs(dest_root, exist_ok=True)
+
+    bucket_path = hf_bucket_path.replace("hf://", "")
+    entries = hffs.ls(bucket_path, detail=True)
+    count = 0
+    for entry in entries:
+        if entry["type"] == "file":
+            name = entry["name"].split("/")[-1]
+            local_dest = os.path.join(dest_root, name)
+            with hffs.open(entry["name"], "rb") as src, open(local_dest, "wb") as dst:
+                shutil.copyfileobj(src, dst)
+            count += 1
+
+    volume.commit()
+    return count
 
 
 def _get_mesh_stats(mesh_bytes: bytes) -> dict:

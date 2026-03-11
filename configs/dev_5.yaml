@@ -1,0 +1,38 @@
+# Minimal dev config: run the full data pipeline on just 5 objects.
+# Usage: ./scripts/run_dev_pipeline.sh
+
+project_name: "llm-3d-dev"
+seed: 42
+output_dir: "./output/dev"
+data_dir: "./data"
+
+objaverse_filter:
+  min_face_count: 100
+  max_vertex_count: 500000
+  exclude_animated: true
+  max_uids: 5
+  output_path: "datasets/dev/filtered_uids.json"
+
+synthetic_gen:
+  teacher_model: "gpt-4o-mini"
+  teacher_provider: "openai"
+  temperature: 0.7
+  samples_per_caption: 2
+  max_attempts_per_caption: 2
+  max_concurrent_llm: 2
+  max_concurrent_blender: 4
+  queue_size: 16
+  num_producers: 1
+  num_consumers: 4
+  cd_threshold: 0.05
+  f_score_threshold: 0.1
+  min_faces: 4
+  max_vertices: 100000
+  batch_size: 5
+  output_path: "datasets/dev/synthetic_sft.jsonl"
+  hard_prompts_path: "datasets/dev/hard_prompts.csv"
+  checkpoint_path: "datasets/dev/synthetic_checkpoint.json"
+
+logging:
+  level: "INFO"
+  wandb_enabled: false

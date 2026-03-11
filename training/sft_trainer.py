@@ -22,7 +22,8 @@ except ImportError:
     tinker = None  # type: ignore[assignment]
     tinker_types = None  # type: ignore[assignment]
 
-from config import ProjectConfig, load_config
+from config import ProjectConfig, StorageConfig, load_config
+from data.storage import open_read
 from training.wandb_logger import WandbLogger
 
 log = logging.getLogger(__name__)
@@ -31,9 +32,15 @@ log = logging.getLogger(__name__)
 class SFTDataLoader:
     """Loads SFT dataset and yields batches in chat format."""
 
-    def __init__(self, jsonl_path: str | Path, batch_size: int = 8, seed: int = 42):
+    def __init__(
+        self,
+        jsonl_path: str | Path,
+        batch_size: int = 8,
+        seed: int = 42,
+        storage_cfg: StorageConfig | None = None,
+    ):
         self.samples: list[dict] = []
-        with open(jsonl_path) as f:
+        with open_read(str(jsonl_path), storage_cfg) as f:
             for line in f:
                 line = line.strip()
                 if line:
@@ -124,6 +131,7 @@ class SFTTrainer:
             sft.train_path,
             batch_size=sft.batch_size,
             seed=self.cfg.seed,
+            storage_cfg=self.cfg.storage,
         )
 
         training_client = None
@@ -244,7 +252,10 @@ if __name__ == "__main__":
 
     from configs.structured import register_configs
 
+    from config import _load_env_file
+
     register_configs()
+    _load_env_file()
 
     @hydra.main(config_path="../configs", config_name="config", version_base="1.3")
     def _hydra_main(hydra_cfg: DictConfig) -> None:

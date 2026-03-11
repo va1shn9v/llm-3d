@@ -9,7 +9,7 @@ import tempfile
 
 import modal
 
-from modal_infra.images import blender_image
+from modal_infra.images import blender_gpu_image
 
 app = modal.App("llm3d-render-worker")
 volume = modal.Volume.from_name("llm3d-data", create_if_missing=True)
@@ -69,6 +69,17 @@ scene.render.film_transparent = True
 scene.render.image_settings.file_format = "PNG"
 scene.render.image_settings.color_mode = "RGBA"
 
+if engine == "CYCLES":
+    try:
+        prefs = bpy.context.preferences.addons["cycles"].preferences
+        prefs.compute_device_type = "CUDA"
+        prefs.get_devices()
+        for d in prefs.devices:
+            d.use = d.type != "CPU"
+        scene.cycles.device = "GPU"
+    except Exception:
+        pass
+
 # Lighting
 light_data = bpy.data.lights.new("Sun", type="SUN")
 light_data.energy = 3.0
@@ -104,7 +115,7 @@ print("RENDER_COMPLETE")
 
 
 @app.function(
-    image=blender_image, cpu=2, memory=4096, timeout=300,
+    image=blender_gpu_image, gpu="T4", cpu=2, memory=4096, timeout=300,  # keep in sync with ModalConfig
     volumes={"/data": volume},
 )
 def render_mesh_views(

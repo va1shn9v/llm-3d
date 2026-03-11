@@ -72,29 +72,35 @@ class QualityGateConfig(BaseModel):
 
 
 class ObjaverseFilterConfig(BaseModel):
-    """Objaverse++ quality filtering."""
-    quality_tiers: list[str] = Field(default_factory=lambda: ["High", "Superior"])
-    exclude_scenes: bool = True
-    exclude_transparent: bool = True
+    """Objaverse 1.0 quality filtering via LVIS annotations + metadata."""
+    min_face_count: int = 100
+    max_vertex_count: int = 500_000
+    exclude_animated: bool = True
     max_uids: int | None = None
     output_path: str = "datasets/filtered_uids.json"
 
 
 class SyntheticGenConfig(BaseModel):
     """Teacher LLM synthetic data generation."""
-    teacher_model: str = "gpt-4o-mini"
+    teacher_model: str = "gpt-5.4"
     teacher_provider: str = "openai"
     temperature: float = 0.7
+    samples_per_caption: int = 3
     max_attempts_per_caption: int = 3
+    max_concurrent_llm: int = 32
+    max_concurrent_blender: int = 64
+    queue_size: int = 512
+    num_producers: int = 16
+    num_consumers: int = 64
     cd_threshold: float = 0.05
     f_score_threshold: float = 0.1
     min_faces: int = 4
     max_vertices: int = 100_000
     batch_size: int = 50
-    max_concurrent_blender: int = 32
     output_path: str = "datasets/synthetic_sft.jsonl"
     hard_prompts_path: str = "datasets/hard_prompts.csv"
     checkpoint_path: str = "datasets/synthetic_checkpoint.json"
+    volume_artifact_dir: str = "/data/synthetic"
 
 
 class HardMiningConfig(BaseModel):
@@ -145,7 +151,8 @@ class ModalConfig(BaseModel):
     reward_timeout_s: int = 600
     reward_concurrency: int = 50
     reward_keep_warm: int = 1
-    max_parallel_workers: int = 64
+    max_parallel_workers: int = 128
+    render_gpu: str = "T4"
     endpoint: str = ""
     auth_token: str = ""
     volume_name: str = "llm3d-data"
@@ -230,6 +237,14 @@ class EvalConfig(BaseModel):
     bootstrap_samples: int = 10_000
 
 
+class StorageConfig(BaseModel):
+    """Remote storage via HuggingFace Storage Buckets."""
+    backend: str = "hf"  # "local" | "hf"
+    hf_bucket: str = "llm3d-data"
+    hf_bucket_namespace: str = ""  # e.g. "username" -> hf://buckets/username/llm3d-data
+    cache_dir: str = ".cache/hf_data"
+
+
 class LoggingConfig(BaseModel):
     level: str = "INFO"
     log_dir: str = "./logs"
@@ -263,6 +278,7 @@ class ProjectConfig(BaseSettings):
     sft: SFTConfig = Field(default_factory=SFTConfig)
     rl: RLConfig = Field(default_factory=RLConfig)
     eval: EvalConfig = Field(default_factory=EvalConfig)
+    storage: StorageConfig = Field(default_factory=StorageConfig)
     logging: LoggingConfig = Field(default_factory=LoggingConfig)
 
     model_config = {

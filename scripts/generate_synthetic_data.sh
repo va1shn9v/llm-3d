@@ -19,16 +19,22 @@ echo "  3. Validate against ground-truth meshes (CD, F-Score)"
 echo "  4. Track hard prompts (high failure rate) in CSV for RLVR hard mining"
 echo ""
 
+echo "Deploying Modal apps..."
+modal deploy modal_infra/blender_worker.py
+modal deploy modal_infra/metrics_worker.py
+echo ""
+
 python -c "
+import asyncio
 import logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s | %(levelname)s | %(message)s')
+logging.basicConfig(level=logging.INFO, format='%(asctime)s | %(levelname)s | %(name)s | %(message)s')
 
 from config import load_config
 from data.synthetic_generator import SyntheticGenerator
 
 cfg = load_config('$CONFIG')
 gen = SyntheticGenerator(cfg)
-validated = gen.generate()
+validated = asyncio.run(gen.generate())
 print(f'Generated {len(validated)} validated (caption, code) pairs')
 print(f'Hard prompts CSV: {cfg.synthetic_gen.hard_prompts_path}')
 "

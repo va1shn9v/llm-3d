@@ -17,9 +17,9 @@ views:
   camera_distance_factor: 2.5
 
 objaverse_filter:
-  quality_tiers: ["High", "Superior"]
-  exclude_scenes: true
-  exclude_transparent: true
+  min_face_count: 100
+  max_vertex_count: 500000
+  exclude_animated: true
   output_path: "datasets/filtered_uids.json"
 
 synthetic_gen:

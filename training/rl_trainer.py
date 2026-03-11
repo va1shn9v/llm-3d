@@ -27,6 +27,7 @@ except ImportError:
 
 from config import ProjectConfig, load_config
 from data.hard_prompts import HardPromptSampler
+from data.storage import open_read
 from environments.blender_3d.harness import Blender3DHarness
 from training.wandb_logger import WandbLogger
 
@@ -42,7 +43,7 @@ class RLPromptSampler:
         cfg: ProjectConfig,
     ):
         self.items: list[dict] = []
-        with open(jsonl_path, encoding="utf-8") as f:
+        with open_read(str(jsonl_path), cfg.storage) as f:
             for line in f:
                 line = line.strip()
                 if line:
@@ -345,7 +346,10 @@ if __name__ == "__main__":
 
     from configs.structured import register_configs
 
+    from config import _load_env_file
+
     register_configs()
+    _load_env_file()
 
     @hydra.main(config_path="../configs", config_name="config", version_base="1.3")
     def _hydra_main(hydra_cfg: DictConfig) -> None:

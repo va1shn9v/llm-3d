@@ -13,25 +13,32 @@ import json
 import logging
 from pathlib import Path
 
+import pandas as pd
+from huggingface_hub import hf_hub_download
+
 from config import ProjectConfig, load_config
 
 log = logging.getLogger(__name__)
 
+CAP3D_CSV = "Cap3D_automated_Objaverse_full.csv"
+
 
 def load_cap3d_captions() -> dict[str, str]:
-    """Load Cap3D captions into a uid -> caption dict."""
-    from datasets import load_dataset
+    """Load Cap3D captions into a uid -> caption dict.
 
+    Downloads the CSV directly from HuggingFace Hub to avoid ClassLabel
+    schema issues with `load_dataset`.
+    """
     log.info("Loading Cap3D captions from HuggingFace...")
-    ds = load_dataset("tiange/Cap3D", split="train")
+    csv_path = hf_hub_download(
+        repo_id="tiange/Cap3D",
+        filename=CAP3D_CSV,
+        repo_type="dataset",
+    )
+    df = pd.read_csv(csv_path, header=None, names=["uid", "caption"])
+    df = df.dropna(subset=["uid", "caption"])
 
-    captions: dict[str, str] = {}
-    for row in ds:
-        uid = row.get("uid") or row.get("object_uid", "")
-        caption = row.get("caption", "")
-        if uid and caption:
-            captions[uid] = caption
-
+    captions: dict[str, str] = dict(zip(df["uid"].astype(str), df["caption"].astype(str)))
     log.info(f"Loaded {len(captions)} Cap3D captions")
     return captions
 

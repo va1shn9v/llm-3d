@@ -281,7 +281,10 @@ if __name__ == "__main__":
 
     from configs.structured import register_configs
 
+    from config import _load_env_file
+
     register_configs()
+    _load_env_file()
 
     @hydra.main(config_path="../configs", config_name="config", version_base="1.3")
     def _hydra_main(hydra_cfg: DictConfig) -> None:
