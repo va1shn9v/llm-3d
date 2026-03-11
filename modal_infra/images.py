@@ -1,15 +1,17 @@
 """
 Modal Docker image definitions for Blender execution, metrics, and CLIP scoring.
+
+Kept self-contained (no project imports) so it works inside Modal containers
+where only the modal_infra/ files are mounted.
 """
 
 from __future__ import annotations
 
+import os
+
 import modal
 
-from config import load_config
-
-_cfg = load_config()
-_bv = _cfg.modal.blender_version
+_bv = os.environ.get("BLENDER_VERSION", "4.2.0")
 
 
 def make_blender_image() -> modal.Image:

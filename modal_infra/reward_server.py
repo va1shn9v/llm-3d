@@ -20,10 +20,16 @@ import time
 import modal
 from modal import asgi_app
 
-from modal_infra.images import blender_image
-from modal_infra.blender_worker import execute_blender_code
-from modal_infra.metrics_worker import compute_metrics
-from modal_infra.render_worker import render_mesh_views
+try:
+    from modal_infra.images import blender_image
+    from modal_infra.blender_worker import execute_blender_code
+    from modal_infra.metrics_worker import compute_metrics
+    from modal_infra.render_worker import render_mesh_views
+except ModuleNotFoundError:
+    from images import blender_image
+    from blender_worker import execute_blender_code
+    from metrics_worker import compute_metrics
+    from render_worker import render_mesh_views
 
 app = modal.App("llm3d-reward-api")
 volume = modal.Volume.from_name("llm3d-data", create_if_missing=True)

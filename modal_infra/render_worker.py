@@ -9,7 +9,10 @@ import tempfile
 
 import modal
 
-from modal_infra.images import blender_gpu_image
+try:
+    from modal_infra.images import blender_gpu_image
+except ModuleNotFoundError:
+    from images import blender_gpu_image
 
 app = modal.App("llm3d-render-worker")
 volume = modal.Volume.from_name("llm3d-data", create_if_missing=True)

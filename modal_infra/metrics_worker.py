@@ -9,7 +9,10 @@ from typing import Any
 
 import modal
 
-from modal_infra.images import metrics_image
+try:
+    from modal_infra.images import metrics_image
+except ModuleNotFoundError:
+    from images import metrics_image
 
 app = modal.App("llm3d-metrics-worker")
 

@@ -16,7 +16,10 @@ from typing import Any
 
 import modal
 
-from modal_infra.images import blender_image
+try:
+    from modal_infra.images import blender_image
+except ModuleNotFoundError:
+    from images import blender_image
 
 app = modal.App("llm3d-blender-worker")
 volume = modal.Volume.from_name("llm3d-data", create_if_missing=True)
