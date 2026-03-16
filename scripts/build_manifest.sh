@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Phase 0b: Join Cap3D captions with filtered UIDs and download meshes.
+# Phase 0b: Join Cap3D captions and ingest meshes remotely into HF bucket storage.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -8,8 +8,17 @@ cd "$PROJECT_ROOT"
 
 CONFIG="${1:-configs/default.yaml}"
 
-echo "=== Building manifest (Cap3D join + mesh download) ==="
+echo "=== Building manifest (remote mesh ingest -> HF bucket) ==="
 echo "Config: $CONFIG"
+echo ""
+
+if [ -z "${HF_TOKEN:-${HUGGINGFACE_HUB_TOKEN:-}}" ]; then
+  echo "HF_TOKEN or HUGGINGFACE_HUB_TOKEN must be set so Modal can upload meshes to your HF bucket."
+  exit 1
+fi
+
+echo "Deploying Modal data worker..."
+modal deploy modal_infra/data_worker.py
 echo ""
 
 python -c "

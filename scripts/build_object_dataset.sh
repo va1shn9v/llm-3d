@@ -14,23 +14,27 @@ echo ""
 
 python -c "
 import logging
+from pathlib import Path
 logging.basicConfig(level=logging.INFO, format='%(asctime)s | %(levelname)s | %(message)s')
 
 from config import load_config
 from data.dataset_builder import build_datasets, save_splits
+from data.storage import resolve_manifest_path
 
 cfg = load_config('$CONFIG')
+manifest_path = resolve_manifest_path(cfg.storage)
 
 splits = build_datasets(
     synthetic_jsonl_path=cfg.synthetic_gen.output_path,
-    manifest_jsonl_path=f'{cfg.data_dir}/manifest.jsonl',
+    manifest_jsonl_path=manifest_path,
     cfg=cfg,
 )
-save_splits(splits, f'{cfg.output_dir}/datasets')
+dataset_dir = Path(cfg.sft.train_path).parent
+save_splits(splits, dataset_dir)
 
 for name, split in splits.items():
     print(f'  {name}: {len(split.samples)} samples')
-print('Dataset splits saved.')
+print(f'Dataset splits saved to {dataset_dir}.')
 "
 
 echo ""

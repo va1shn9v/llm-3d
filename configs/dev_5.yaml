@@ -13,9 +13,21 @@ objaverse_filter:
   max_uids: 5
   output_path: "datasets/dev/filtered_uids.json"
 
+storage:
+  backend: "hf"
+  hf_bucket: "llm3d-data"
+  hf_bucket_namespace: ""
+  cache_dir: ".cache/hf_data"
+  local_manifest_path: "data/manifest.jsonl"
+  manifest_key: "datasets/dev/manifest.jsonl"
+  mesh_prefix: "meshes/dev"
+  modal_volume_mesh_subdir: "meshes"
+
 synthetic_gen:
-  teacher_model: "gpt-5.4"
+  teacher_model: "gpt-5.3-codex"
   teacher_provider: "openai"
+  teacher_api: "responses"
+  teacher_reasoning_effort: "high"
   temperature: 0.7
   samples_per_caption: 2
   max_attempts_per_caption: 2

@@ -9,15 +9,33 @@ import logging
 from pathlib import Path
 from typing import Any
 
+from config import StorageConfig
+from data.storage import open_read
+
 log = logging.getLogger(__name__)
 
 SYSTEM_PROMPT = (
-    "You are an expert Blender Python developer. Given a text description of a 3D object, "
-    "write a complete bpy script that creates the described geometry. Use standard bpy "
-    "operations (primitives, BMesh, modifiers, booleans, curves). The script must: "
-    "1. Start with `import bpy` and clear the default scene. "
-    "2. Create the geometry described. "
-    "3. Export the result to OBJ at the path from os.environ['EXPORT_PATH']. "
+    "You are an expert Blender Python developer targeting Blender 4.2. "
+    "Given a text description of a 3D object, write a complete bpy script that creates "
+    "the described geometry with appropriate materials.\n\n"
+    "APPROACH: Decompose the object into logical parts, build each with the best Blender "
+    "construct (primitives, BMesh, curves, modifiers), add materials via Principled BSDF, "
+    "then export.\n\n"
+    "REQUIRED STRUCTURE:\n"
+    "1. `import bpy, os, math, bmesh` and clear the scene\n"
+    "2. Create geometry for each part\n"
+    "3. Add materials (Principled BSDF)\n"
+    "4. Apply smooth shading via bpy.ops.object.shade_smooth()\n"
+    "5. Select all and export: bpy.ops.wm.obj_export(filepath=os.environ['EXPORT_PATH'], "
+    "export_selected_objects=True, export_materials=False, apply_modifiers=True)\n\n"
+    "BLENDER 4.2 RULES:\n"
+    "- NEVER use obj.data.use_auto_smooth (removed)\n"
+    "- NEVER use bpy.ops.export_scene.obj() (removed)\n"
+    "- Use 'BLENDER_EEVEE_NEXT' not 'BLENDER_EEVEE'\n"
+    "- Use 'Specular IOR Level' not 'Specular' in Principled BSDF\n"
+    "- mathutils is top-level: from mathutils import Vector\n"
+    "- After join()/remove(), re-acquire object references\n"
+    "- BMesh: always ensure_lookup_table() and bm.free()\n\n"
     "Output only the Python code, no explanations."
 )
 
@@ -36,13 +54,15 @@ class Blender3DDataset:
     def __init__(
         self,
         jsonl_path: str | Path,
+        storage_cfg: StorageConfig | None = None,
     ):
-        self.jsonl_path = Path(jsonl_path)
+        self.jsonl_path = str(jsonl_path)
+        self.storage_cfg = storage_cfg
         self._items: list[dict[str, Any]] = []
         self._load()
 
     def _load(self):
-        with open(self.jsonl_path) as f:
+        with open_read(self.jsonl_path, self.storage_cfg) as f:
             for line in f:
                 line = line.strip()
                 if not line:
@@ -86,6 +106,8 @@ class Blender3DDataset:
     @staticmethod
     def format_prompt_text(caption: str) -> str:
         return (
-            f"Create a 3D model of: {caption}. "
-            f"Write a complete Blender Python script using the bpy module."
+            f"Create a 3D model of: {caption}\n\n"
+            f"Decompose the object into its main parts, build each with appropriate "
+            f"Blender constructs (primitives, BMesh, curves, modifiers), add materials, "
+            f"and export to OBJ. Write a complete Blender Python script."
         )

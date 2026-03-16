@@ -1,34 +1,30 @@
 """
-Cap3D caption joining + Objaverse mesh download (Phase 0 of pipeline).
+Cap3D caption joining + remote Objaverse mesh ingest.
 
-Joins quality-filtered UIDs with Cap3D text captions, downloads the actual
-GLB/OBJ meshes from Objaverse for ground-truth reward computation during RLVR.
-
-Outputs a manifest JSONL: each line has {uid, caption, mesh_path}.
+Builds a manifest of {uid, caption, mesh_path} entries where ``mesh_path``
+points at an external HF bucket location instead of a local mesh copy.
 """
 
 from __future__ import annotations
 
+import gzip
 import json
 import logging
-from pathlib import Path
 
 import pandas as pd
 from huggingface_hub import hf_hub_download
 
 from config import ProjectConfig, load_config
+from data.storage import bucket_uri, resolve_manifest_path, write_text
 
 log = logging.getLogger(__name__)
 
 CAP3D_CSV = "Cap3D_automated_Objaverse_full.csv"
+OBJAVERSE_OBJECT_PATHS = "object-paths.json.gz"
 
 
 def load_cap3d_captions() -> dict[str, str]:
-    """Load Cap3D captions into a uid -> caption dict.
-
-    Downloads the CSV directly from HuggingFace Hub to avoid ClassLabel
-    schema issues with `load_dataset`.
-    """
+    """Load Cap3D captions into a uid -> caption dict."""
     log.info("Loading Cap3D captions from HuggingFace...")
     csv_path = hf_hub_download(
         repo_id="tiange/Cap3D",
@@ -39,74 +35,69 @@ def load_cap3d_captions() -> dict[str, str]:
     df = df.dropna(subset=["uid", "caption"])
 
     captions: dict[str, str] = dict(zip(df["uid"].astype(str), df["caption"].astype(str)))
-    log.info(f"Loaded {len(captions)} Cap3D captions")
+    log.info("Loaded %d Cap3D captions", len(captions))
     return captions
 
 
-def download_meshes(uids: list[str], output_dir: str | Path) -> dict[str, str]:
-    """Download Objaverse GLB meshes for given UIDs.
-
-    Returns dict mapping uid -> local mesh file path.
-    """
-    import objaverse
-
-    output_dir = Path(output_dir)
-    output_dir.mkdir(parents=True, exist_ok=True)
-
-    log.info(f"Downloading {len(uids)} meshes from Objaverse...")
-    objects = objaverse.load_objects(uids=uids, download_processes=8)
-
-    uid_to_path: dict[str, str] = {}
-    for uid, path in objects.items():
-        if path and Path(path).exists():
-            uid_to_path[uid] = str(path)
-
-    log.info(f"Successfully downloaded {len(uid_to_path)}/{len(uids)} meshes")
-    return uid_to_path
+def load_objaverse_object_paths() -> dict[str, str]:
+    """Load Objaverse UID -> object path mapping."""
+    path = hf_hub_download(
+        repo_id="allenai/objaverse",
+        filename=OBJAVERSE_OBJECT_PATHS,
+        repo_type="dataset",
+    )
+    with gzip.open(path, "rt", encoding="utf-8") as f:
+        return json.load(f)
 
 
 def build_manifest(
     cfg: ProjectConfig | None = None,
     filtered_uids_path: str | None = None,
 ) -> list[dict]:
-    """Join filtered UIDs with Cap3D captions and download meshes.
-
-    Returns and saves a manifest of {uid, caption, mesh_path} entries.
-    """
+    """Build a manifest by ingesting meshes remotely into the configured HF bucket."""
     if cfg is None:
         cfg = load_config()
+
+    if cfg.storage.backend != "hf":
+        raise ValueError(
+            "Remote-first manifest build requires storage.backend='hf'. "
+            "Switch the config or implement a separate local-only ingest path."
+        )
 
     if filtered_uids_path is None:
         filtered_uids_path = cfg.objaverse_filter.output_path
 
-    with open(filtered_uids_path) as f:
+    with open(filtered_uids_path, encoding="utf-8") as f:
         uids: list[str] = json.load(f)
-    log.info(f"Loaded {len(uids)} filtered UIDs")
+    log.info("Loaded %d filtered UIDs", len(uids))
 
-    captions = load_cap3d_captions()
+    import modal
 
-    uids_with_captions = [uid for uid in uids if uid in captions]
-    log.info(f"{len(uids_with_captions)}/{len(uids)} UIDs have Cap3D captions")
+    bucket_root = bucket_uri("", cfg.storage)
+    build_remote_manifest = modal.Function.from_name(
+        "llm3d-data-worker",
+        "build_remote_mesh_manifest",
+    )
+    manifest: list[dict] = build_remote_manifest.remote(
+        uids,
+        bucket_root,
+        cfg.storage.mesh_prefix,
+    )
 
-    mesh_dir = Path(cfg.data_dir) / "meshes"
-    uid_to_mesh = download_meshes(uids_with_captions, mesh_dir)
+    manifest_text = "".join(json.dumps(entry) + "\n" for entry in manifest)
+    local_manifest_path = cfg.storage.local_manifest_path
+    write_text(local_manifest_path, manifest_text, cfg.storage)
 
-    manifest: list[dict] = []
-    for uid in uids_with_captions:
-        if uid not in uid_to_mesh:
-            continue
-        manifest.append({
-            "uid": uid,
-            "caption": captions[uid],
-            "mesh_path": uid_to_mesh[uid],
-        })
+    manifest_path = resolve_manifest_path(cfg.storage)
+    if manifest_path != local_manifest_path:
+        write_text(manifest_path, manifest_text, cfg.storage)
 
-    manifest_path = Path(cfg.data_dir) / "manifest.jsonl"
-    manifest_path.parent.mkdir(parents=True, exist_ok=True)
-    with open(manifest_path, "w") as f:
-        for entry in manifest:
-            f.write(json.dumps(entry) + "\n")
-    log.info(f"Saved manifest with {len(manifest)} entries to {manifest_path}")
+    log.info(
+        "Saved manifest with %d entries to %s (local mirror: %s)",
+        len(manifest),
+        manifest_path,
+        local_manifest_path,
+    )
 
     return manifest
 

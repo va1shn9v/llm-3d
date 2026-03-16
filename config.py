@@ -82,8 +82,10 @@ class ObjaverseFilterConfig(BaseModel):
 
 class SyntheticGenConfig(BaseModel):
     """Teacher LLM synthetic data generation."""
-    teacher_model: str = "gpt-5.4"
+    teacher_model: str = "gpt-5.3-codex"
     teacher_provider: str = "openai"
+    teacher_api: str = "auto"
+    teacher_reasoning_effort: str = "high"
     temperature: float = 0.7
     samples_per_caption: int = 3
     max_attempts_per_caption: int = 3
@@ -124,12 +126,27 @@ class DatasetConfig(BaseModel):
         "face_count": 0.3,
     })
     system_prompt: str = (
-        "You are an expert Blender Python developer. Given a text description of a 3D object, "
-        "write a complete bpy script that creates the described geometry. Use standard bpy "
-        "operations (primitives, BMesh, modifiers, booleans, curves). The script must: "
-        "1. Start with `import bpy` and clear the default scene. "
-        "2. Create the geometry described. "
-        "3. Export the result to OBJ at the path from os.environ['EXPORT_PATH']. "
+        "You are an expert Blender Python developer targeting Blender 4.2. "
+        "Given a text description of a 3D object, write a complete bpy script that creates "
+        "the described geometry with appropriate materials.\n\n"
+        "APPROACH: Decompose the object into logical parts, build each with the best Blender "
+        "construct (primitives, BMesh, curves, modifiers), add materials via Principled BSDF, "
+        "then export.\n\n"
+        "REQUIRED STRUCTURE:\n"
+        "1. `import bpy, os, math, bmesh` and clear the scene\n"
+        "2. Create geometry for each part\n"
+        "3. Add materials (Principled BSDF)\n"
+        "4. Apply smooth shading via bpy.ops.object.shade_smooth()\n"
+        "5. Select all and export: bpy.ops.wm.obj_export(filepath=os.environ['EXPORT_PATH'], "
+        "export_selected_objects=True, export_materials=False, apply_modifiers=True)\n\n"
+        "BLENDER 4.2 RULES:\n"
+        "- NEVER use obj.data.use_auto_smooth (removed)\n"
+        "- NEVER use bpy.ops.export_scene.obj() (removed)\n"
+        "- Use 'BLENDER_EEVEE_NEXT' not 'BLENDER_EEVEE'\n"
+        "- Use 'Specular IOR Level' not 'Specular' in Principled BSDF\n"
+        "- mathutils is top-level: from mathutils import Vector\n"
+        "- After join()/remove(), re-acquire object references\n"
+        "- BMesh: always ensure_lookup_table() and bm.free()\n\n"
         "Output only the Python code, no explanations."
     )
 
@@ -243,6 +260,10 @@ class StorageConfig(BaseModel):
     hf_bucket: str = "llm3d-data"
     hf_bucket_namespace: str = ""  # e.g. "username" -> hf://buckets/username/llm3d-data
     cache_dir: str = ".cache/hf_data"
+    local_manifest_path: str = "data/manifest.jsonl"
+    manifest_key: str = "datasets/manifest.jsonl"
+    mesh_prefix: str = "meshes"
+    modal_volume_mesh_subdir: str = "meshes"
 
 
 class LoggingConfig(BaseModel):

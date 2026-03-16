@@ -12,6 +12,7 @@ import os
 import subprocess
 import tempfile
 import time
+from pathlib import Path
 from typing import Any
 
 import modal
@@ -38,10 +39,13 @@ blender_image = (
 )
 volume = modal.Volume.from_name("llm3d-data", create_if_missing=True)
 
+_EXPORT_PATH_PLACEHOLDER = "___EXPORT_PATH___"
+_USER_CODE_PLACEHOLDER = "___USER_CODE___"
+
 _WRAPPER_TEMPLATE = """\
 import sys, os
 
-os.environ["EXPORT_PATH"] = "{export_path}"
+os.environ["EXPORT_PATH"] = "___EXPORT_PATH___"
 
 # ===== BLENDER 4.x COMPATIBILITY SHIM =====
 import bpy as _bpy_shim
@@ -56,7 +60,6 @@ if not hasattr(_OrigMeshType, "use_auto_smooth"):
 
 # Patch legacy OBJ export operator if missing
 if not hasattr(_bpy_shim.ops.export_scene, "obj"):
-    import types as _types
     def _legacy_obj_export(**kw):
         filepath = kw.pop("filepath", kw.pop("path", ""))
         use_selection = kw.pop("use_selection", False)
@@ -71,33 +74,109 @@ import mathutils as _mathutils_mod
 if not hasattr(_bpy_shim, "mathutils"):
     _bpy_shim.mathutils = _mathutils_mod
 
-del _OrigMeshType, _bpy_shim
+del _OrigMeshType, _bpy_shim, _mathutils_mod
 # ===== END COMPATIBILITY SHIM =====
 
 # ===== BEGIN USER CODE =====
-{user_code}
+___USER_CODE___
 # ===== END USER CODE =====
 
-# Auto-export if user code didn't write to EXPORT_PATH
+# ===== AUTO-EXPORT FALLBACK =====
 import bpy as _bpy
 import os as _os
-if not _os.path.exists("{export_path}"):
+
+_export_path = "___EXPORT_PATH___"
+
+def _apply_modifiers_for_export():
+    for obj in list(_bpy.data.objects):
+        if obj.type != 'MESH':
+            continue
+        try:
+            _bpy.context.view_layer.objects.active = obj
+            obj.select_set(True)
+            for mod in list(obj.modifiers):
+                try:
+                    _bpy.ops.object.modifier_apply(modifier=mod.name)
+                except Exception:
+                    pass
+            obj.select_set(False)
+        except Exception:
+            pass
+
+def _robust_export(path):
+    mesh_objects = [o for o in _bpy.data.objects if o.type == 'MESH']
+    curve_objects = [o for o in _bpy.data.objects if o.type == 'CURVE']
+    exportable = mesh_objects + curve_objects
+    if not exportable:
+        return False
+
+    _bpy.ops.object.select_all(action='DESELECT')
+    for o in exportable:
+        o.select_set(True)
+    _bpy.context.view_layer.objects.active = exportable[0]
+
     try:
-        mesh_objects = [o for o in _bpy.data.objects if o.type == 'MESH']
-        if mesh_objects:
-            _bpy.ops.object.select_all(action='DESELECT')
-            for o in mesh_objects:
-                o.select_set(True)
-            _bpy.context.view_layer.objects.active = mesh_objects[0]
-            _bpy.ops.wm.obj_export(
-                filepath="{export_path}",
-                export_selected_objects=True,
-                export_uv=False,
-                export_materials=False,
-            )
+        _bpy.ops.wm.obj_export(
+            filepath=path,
+            export_selected_objects=True,
+            export_uv=False,
+            export_normals=True,
+            export_materials=False,
+            apply_modifiers=True,
+        )
+        return True
     except Exception:
-        pass
+        return False
+
+_needs_export = True
+if _os.path.exists(_export_path):
+    _fsize = _os.path.getsize(_export_path)
+    if _fsize > 100:
+        _needs_export = False
+    else:
+        _os.remove(_export_path)
+
+if _needs_export:
+    _apply_modifiers_for_export()
+    _robust_export(_export_path)
 """
+
+
+_CODE_REPLACEMENTS = [
+    ("'BLENDER_EEVEE'", "'BLENDER_EEVEE_NEXT'"),
+    ('"BLENDER_EEVEE"', '"BLENDER_EEVEE_NEXT"'),
+    ("bpy.ops.export_scene.obj(", "bpy.ops.wm.obj_export("),
+    ('.inputs["Specular"]', '.inputs["Specular IOR Level"]'),
+    (".inputs['Specular']", ".inputs['Specular IOR Level']"),
+    ('.inputs["Clearcoat"]', '.inputs["Coat Weight"]'),
+    (".inputs['Clearcoat']", ".inputs['Coat Weight']"),
+    ('.inputs["Sheen"]', '.inputs["Sheen Weight"]'),
+    (".inputs['Sheen']", ".inputs['Sheen Weight']"),
+]
+
+_CODE_LINE_REMOVALS = [
+    "use_auto_smooth",
+    "auto_smooth_angle",
+]
+
+
+def _sanitize_code(code: str) -> str:
+    """Apply Blender 4.2 compatibility fixes to user code before execution."""
+    for old, new in _CODE_REPLACEMENTS:
+        code = code.replace(old, new)
+
+    lines = code.splitlines(keepends=True)
+    cleaned = []
+    for line in lines:
+        stripped = line.strip()
+        if any(pat in stripped for pat in _CODE_LINE_REMOVALS):
+            if stripped.startswith("#"):
+                cleaned.append(line)
+            else:
+                cleaned.append(line.replace(stripped, f"pass  # removed: {stripped}"))
+        else:
+            cleaned.append(line)
+    return "".join(cleaned)
 
 
 @app.function(image=blender_image, cpu=2, memory=4096, timeout=150)  # keep in sync with ModalConfig
@@ -108,13 +187,17 @@ def execute_blender_code(code: str, seed: int = 42) -> dict[str, Any]:
     """
     t0 = time.monotonic()
 
+    code = _sanitize_code(code)
+
     with tempfile.TemporaryDirectory() as tmp:
         export_path = os.path.join(tmp, "output.obj")
         script_path = os.path.join(tmp, "script.py")
 
-        wrapped = _WRAPPER_TEMPLATE.format(
-            export_path=export_path.replace("\\", "\\\\"),
-            user_code=code,
+        safe_export_path = export_path.replace("\\", "\\\\")
+        wrapped = _WRAPPER_TEMPLATE.replace(
+            _EXPORT_PATH_PLACEHOLDER, safe_export_path,
+        ).replace(
+            _USER_CODE_PLACEHOLDER, code,
         )
         with open(script_path, "w") as f:
             f.write(wrapped)
@@ -223,23 +306,101 @@ def sync_from_hf_bucket(
     return count
 
 
+_SUPPORTED_MESH_EXTS = (".obj", ".glb", ".gltf", ".ply", ".stl")
+
+
+def _load_gt_mesh_from_volume(object_id: str, volume_subdir: str = "meshes") -> tuple[bytes, str] | None:
+    for ext in _SUPPORTED_MESH_EXTS:
+        path = Path(f"/data/{volume_subdir}/{object_id}{ext}")
+        if path.exists():
+            return path.read_bytes(), ext.lstrip(".")
+    return None
+
+
+@app.function(image=blender_image, volumes={"/data": volume}, timeout=120, cpu=2, memory=4096)
+def compute_metrics_against_volume_mesh(
+    object_id: str,
+    gen_mesh_bytes: bytes,
+    gen_mesh_format: str = "obj",
+    num_points: int = 10_000,
+    volume_subdir: str = "meshes",
+) -> dict[str, Any]:
+    """Compare generated mesh bytes against a GT mesh stored in the Modal volume."""
+    gt = _load_gt_mesh_from_volume(object_id, volume_subdir)
+    if gt is None:
+        return {
+            "chamfer": float("inf"),
+            "f_score_001": 0.0,
+            "f_score_005": 0.0,
+            "hausdorff_90": float("inf"),
+            "normal_consistency": 0.0,
+            "error": f"GT mesh not found in Modal volume for {object_id}",
+        }
+
+    gt_bytes, gt_format = gt
+    compute_metrics = modal.Function.from_name("llm3d-metrics-worker", "compute_metrics")
+    return compute_metrics.remote(
+        gen_mesh_bytes,
+        gt_bytes,
+        num_points,
+        gen_mesh_format,
+        gt_format,
+    )
+
+
 def _get_mesh_stats(mesh_bytes: bytes) -> dict:
-    """Quick vertex/face count from raw OBJ bytes."""
+    """Quick vertex/face count from raw OBJ bytes.
+
+    Strips mtllib/usemtl references before parsing to avoid resolver
+    failures when loading from in-memory bytes (no filesystem context).
+    Falls back to manual line counting if trimesh still fails.
+    """
     import io
+    import re
+    import sys
 
     import trimesh
 
-    try:
-        mesh = trimesh.load(io.BytesIO(mesh_bytes), file_type="obj", force="mesh", process=True)
-        if hasattr(mesh, "geometry"):
-            meshes = list(mesh.geometry.values())
-            total_v = sum(m.vertices.shape[0] for m in meshes)
-            total_f = sum(m.faces.shape[0] for m in meshes)
-            watertight = all(m.is_watertight for m in meshes)
-        else:
-            total_v = mesh.vertices.shape[0]
-            total_f = mesh.faces.shape[0]
-            watertight = mesh.is_watertight
-        return {"vertices": int(total_v), "faces": int(total_f), "is_watertight": watertight}
-    except Exception:
+    if not mesh_bytes or len(mesh_bytes) < 10:
         return {"vertices": 0, "faces": 0, "is_watertight": False}
+
+    cleaned = re.sub(
+        rb"^(mtllib|usemtl)\s+.*$", b"", mesh_bytes, flags=re.MULTILINE,
+    )
+
+    for attempt_bytes in [cleaned, mesh_bytes]:
+        try:
+            mesh = trimesh.load(
+                io.BytesIO(attempt_bytes),
+                file_type="obj",
+                force="mesh",
+                process=False,
+            )
+            if hasattr(mesh, "geometry"):
+                meshes = list(mesh.geometry.values())
+                total_v = sum(m.vertices.shape[0] for m in meshes)
+                total_f = sum(m.faces.shape[0] for m in meshes)
+                watertight = all(m.is_watertight for m in meshes)
+            else:
+                total_v = mesh.vertices.shape[0]
+                total_f = mesh.faces.shape[0]
+                watertight = mesh.is_watertight
+            if total_v > 0:
+                return {
+                    "vertices": int(total_v),
+                    "faces": int(total_f),
+                    "is_watertight": watertight,
+                }
+        except Exception as exc:
+            print(f"[_get_mesh_stats] trimesh parse attempt failed: {exc}", file=sys.stderr)
+
+    total_v = 0
+    total_f = 0
+    for line in mesh_bytes.split(b"\n"):
+        stripped = line.strip()
+        if stripped.startswith(b"v "):
+            total_v += 1
+        elif stripped.startswith(b"f "):
+            total_f += 1
+
+    return {"vertices": total_v, "faces": total_f, "is_watertight": False}

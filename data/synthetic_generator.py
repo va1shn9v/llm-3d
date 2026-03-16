@@ -24,6 +24,7 @@ from typing import Any
 
 from config import ProjectConfig, load_config
 from data.hard_prompts import HardPromptTracker
+from data.storage import resolve_manifest_path
 
 log = logging.getLogger(__name__)
 _debug_log = logging.getLogger("synthetic_debug")
@@ -50,28 +51,114 @@ def _setup_debug_log(output_path: str | Path) -> None:
     log.info("Debug log: %s", log_path)
 
 _TEACHER_SYSTEM_PROMPT = """\
-You are an expert Blender Python developer targeting Blender 4.2. Write a \
-complete bpy script that creates the described 3D object. Use standard bpy \
-operations (primitives, BMesh, modifiers, booleans, curves). The script must:
-1. Start with `import bpy` and clear the default scene
-2. Create the geometry described
-3. Export the result to OBJ at the path from os.environ["EXPORT_PATH"]
+You are an expert Blender Python developer targeting **Blender 4.2**.
 
-CRITICAL API RULES for Blender 4.2:
-- use_auto_smooth is REMOVED. Do NOT set obj.data.use_auto_smooth or \
-obj.data.auto_smooth_angle. For angle-based smooth shading, add a \
-"Smooth by Angle" modifier: obj.modifiers.new("SmoothAngle", 'SMOOTH').
-- OBJ export: use bpy.ops.wm.obj_export(filepath=...), NOT \
-bpy.ops.export_scene.obj() which no longer exists.
-- mathutils is a top-level module. Use `from mathutils import Vector`, \
-NEVER `bpy.mathutils`.
-- After bpy.ops.object.join(), all source object references are invalid. \
-Re-acquire via bpy.context.active_object and do NOT reuse old variables.
-- After bpy.data.objects.remove(obj), do NOT reference that obj again.
+TASK: Write a complete, self-contained bpy script that creates the described \
+3D object with detailed geometry and materials.
 
-Output only the Python code, no explanations."""
+=== APPROACH (follow this structure) ===
+1. Plan: Mentally decompose the object into logical parts (e.g., a chair → \
+seat, legs, backrest). Build each part as a separate mesh/object.
+2. Build: Use the most appropriate Blender construct for each part:
+   - Primitives (UV sphere, cylinder, cube, torus, cone) for basic shapes
+   - BMesh for custom vertex-level geometry (organic shapes, complex topology)
+   - Bezier/Nurbs curves for wires, handles, tubes, decorative elements
+   - Modifiers (Subdivision Surface, Mirror, Array, Solidify, Boolean) for \
+refinement
+   - Shader nodes for materials (Principled BSDF with proper inputs)
+3. Assemble: Position, scale, and rotate parts. Use parenting for hierarchy.
+4. Export: Export all geometry to OBJ.
+
+=== SCRIPT STRUCTURE (required) ===
+```
+import bpy, os, math, bmesh
+from mathutils import Vector, Matrix
+
+# 1. Clear scene
+bpy.ops.object.select_all(action='SELECT')
+bpy.ops.object.delete(use_global=False)
+for block in bpy.data.meshes:
+    if block.users == 0: bpy.data.meshes.remove(block)
+
+# 2. Helper functions (reusable utilities)
+# 3. Materials (create before geometry)
+# 4. Build each part as labeled section
+# 5. Shade smooth
+# 6. Select all mesh objects, export
+bpy.ops.object.select_all(action='SELECT')
+export_path = os.environ["EXPORT_PATH"]
+bpy.ops.wm.obj_export(
+    filepath=export_path,
+    export_selected_objects=True,
+    export_normals=True,
+    export_materials=False,
+    apply_modifiers=True,
+)
+```
+
+=== CRITICAL BLENDER 4.2 API RULES ===
+1. use_auto_smooth is REMOVED. NEVER set obj.data.use_auto_smooth or \
+obj.data.auto_smooth_angle. Just use bpy.ops.object.shade_smooth() and \
+Subdivision Surface modifiers for smooth shading.
+2. OBJ export: ONLY use bpy.ops.wm.obj_export(filepath=...). \
+bpy.ops.export_scene.obj() does NOT exist.
+3. mathutils is a top-level module: `from mathutils import Vector, Matrix`. \
+NEVER use `bpy.mathutils`.
+4. Render engine enum: use 'BLENDER_EEVEE_NEXT' (not 'BLENDER_EEVEE'). \
+Valid engines: 'BLENDER_EEVEE_NEXT', 'BLENDER_WORKBENCH', 'CYCLES'.
+5. Principled BSDF inputs for Blender 4.2: 'Base Color', 'Roughness', \
+'Metallic', 'Specular IOR Level' (not 'Specular'), 'Alpha', 'Emission Color', \
+'Coat Weight' (not 'Clearcoat'), 'Sheen Weight' (not 'Sheen').
+6. After bpy.ops.object.join(), ALL source object references are INVALID. \
+Re-acquire via bpy.context.active_object.
+7. After bpy.data.objects.remove(obj), NEVER reference that obj again.
+8. bpy.ops functions require correct context. Always set \
+bpy.context.view_layer.objects.active before operator calls.
+
+=== BMESH RULES (critical for avoiding crashes) ===
+- Always call bm.verts.ensure_lookup_table() / bm.edges.ensure_lookup_table() \
+/ bm.faces.ensure_lookup_table() after adding/removing geometry.
+- NEVER create a face that duplicates an existing face → check before \
+bm.faces.new() or wrap in try/except ValueError.
+- Always call bm.to_mesh(mesh) then bm.free() when done. Never reuse a freed BMesh.
+- Use bm.verts.new() for custom vertices, bmesh.ops.create_grid/create_cone \
+for parametric BMesh shapes.
+
+=== EXPORT RULES (critical for non-empty output) ===
+- ALWAYS export with export_materials=False (avoids .mtl resolver issues).
+- ALWAYS export with apply_modifiers=True.
+- Before export, select all objects: bpy.ops.object.select_all(action='SELECT')
+- Ensure at least one MESH object exists before export.
+- Use export_selected_objects=True after selecting desired objects.
+
+=== COMMON PITFALLS TO AVOID ===
+- Do NOT set bpy.context.scene.render.engine to 'BLENDER_EEVEE' (use \
+'BLENDER_EEVEE_NEXT').
+- Do NOT use obj.data.use_auto_smooth (removed in Blender 4.x).
+- Do NOT create duplicate faces in BMesh (ValueError: face already exists).
+- Do NOT reference objects after join() or remove() operations.
+- Do NOT use Blender 3.x API names for shader inputs.
+- Do NOT forget to call bm.free() after bmesh operations.
+- Do NOT export without selecting objects when using export_selected_objects=True.
+
+Output ONLY the Python code. No markdown fences, no explanations."""
 
 _TEACHER_USER_TEMPLATE = "Create a 3D model of: {caption}"
+
+_TEACHER_RETRY_TEMPLATE = """\
+The previous Blender script for "{caption}" failed with this error:
+{error}
+
+Fix the script. Common fixes:
+- 'BLENDER_EEVEE' → use 'BLENDER_EEVEE_NEXT'
+- use_auto_smooth → remove it entirely, use shade_smooth() instead
+- faces.new duplicate → add try/except around bm.faces.new()
+- Missing export → add bpy.ops.wm.obj_export(filepath=os.environ["EXPORT_PATH"])
+- 0 vertex export → use export_materials=False, apply_modifiers=True
+- Specular → use 'Specular IOR Level'
+- export_scene.obj → use bpy.ops.wm.obj_export
+
+Write the complete corrected script. Output ONLY Python code."""
 
 
 def _classify_error(exec_result: dict[str, Any]) -> str:
@@ -91,6 +178,8 @@ def _classify_error(exec_result: dict[str, Any]) -> str:
         return "degenerate"
 
     metrics = exec_result.get("metrics")
+    if metrics and metrics.get("error"):
+        return "metrics_error"
     if metrics and metrics.get("f_score_005", 0) < 0.05:
         return "no_resemblance"
 
@@ -118,6 +207,29 @@ def _extract_code(text: str) -> str | None:
         return None
 
     return text
+
+
+def _teacher_uses_responses_api(model: str) -> bool:
+    model = model.strip().lower()
+    return "codex" in model or model.startswith(("gpt-5", "o1", "o3", "o4"))
+
+
+def _is_chat_endpoint_mismatch(error: Exception) -> bool:
+    message = str(error).lower()
+    return "not a chat model" in message or "not supported in the v1/chat/completions endpoint" in message
+
+
+def _is_unsupported_parameter(error: Exception, param: str) -> bool:
+    message = str(error).lower()
+    param = param.lower()
+    return "unsupported parameter" in message and param in message
+
+
+def _resolve_teacher_api(config: Any) -> str:
+    api = str(getattr(config, "teacher_api", "auto") or "auto").strip().lower()
+    if api in {"responses", "chat"}:
+        return api
+    return "responses" if _teacher_uses_responses_api(config.teacher_model) else "chat"
 
 
 class SyntheticGenerator:
@@ -161,21 +273,54 @@ class SyntheticGenerator:
         provider = self.gen_cfg.teacher_provider
         if provider == "openai":
             from openai import AsyncOpenAI
+            log.info(
+                "Teacher LLM configured with model=%s api=%s provider=%s",
+                self.gen_cfg.teacher_model,
+                _resolve_teacher_api(self.gen_cfg),
+                provider,
+            )
             return AsyncOpenAI()
         raise ValueError(f"Unknown teacher provider: {provider}")
 
-    async def _call_teacher_batch(
-        self, client: Any, caption: str,
+    def _teacher_reasoning(self) -> dict[str, str] | None:
+        effort = getattr(self.gen_cfg, "teacher_reasoning_effort", "")
+        if not effort:
+            return None
+        return {"effort": effort}
+
+    def _responses_support_temperature(self) -> bool:
+        return not _teacher_uses_responses_api(self.gen_cfg.teacher_model)
+
+    def _build_teacher_response_kwargs(self, prompt: str) -> dict[str, Any]:
+        kwargs: dict[str, Any] = {
+            "model": self.gen_cfg.teacher_model,
+            "instructions": _TEACHER_SYSTEM_PROMPT,
+            "input": prompt,
+            "max_output_tokens": 16000,
+        }
+        if self._responses_support_temperature():
+            kwargs["temperature"] = self.gen_cfg.temperature
+
+        reasoning = self._teacher_reasoning()
+        if reasoning:
+            kwargs["reasoning"] = reasoning
+        return kwargs
+
+    async def _call_teacher_batch_chat(
+        self,
+        client: Any,
+        caption: str,
     ) -> list[str]:
-        """Generate multiple code completions in a single API call via n param."""
+        """Generate multiple code completions with the chat completions API."""
         resp = await client.chat.completions.create(
             model=self.gen_cfg.teacher_model,
             messages=[
-                {"role": "system", "content": _TEACHER_SYSTEM_PROMPT},
+                {"role": "developer", "content": _TEACHER_SYSTEM_PROMPT},
                 {"role": "user", "content": _TEACHER_USER_TEMPLATE.format(caption=caption)},
             ],
             n=self.gen_cfg.samples_per_caption,
             temperature=self.gen_cfg.temperature,
+            reasoning_effort=self.gen_cfg.teacher_reasoning_effort,
             max_completion_tokens=16000,
         )
         codes: list[str] = []
@@ -185,8 +330,102 @@ class SyntheticGenerator:
                 codes.append(code)
         return codes
 
+    async def _call_teacher_batch_responses(
+        self,
+        client: Any,
+        prompt: str,
+        num_samples: int,
+    ) -> list[str]:
+        """Generate multiple code completions with the Responses API."""
+        async def _one_call() -> str | None:
+            kwargs = self._build_teacher_response_kwargs(prompt)
+            try:
+                resp = await client.responses.create(**kwargs)
+            except Exception as exc:
+                if "temperature" not in kwargs or not _is_unsupported_parameter(exc, "temperature"):
+                    raise
+                log.warning(
+                    "Teacher model %s rejected temperature on Responses API; retrying without temperature",
+                    self.gen_cfg.teacher_model,
+                )
+                kwargs.pop("temperature", None)
+                resp = await client.responses.create(**kwargs)
+            return _extract_code(resp.output_text)
+
+        codes = await asyncio.gather(*(_one_call() for _ in range(num_samples)))
+        return [code for code in codes if code]
+
+    async def _call_teacher_batch(
+        self, client: Any, caption: str,
+    ) -> list[str]:
+        """Generate multiple code completions using the API compatible with the model."""
+        prompt = _TEACHER_USER_TEMPLATE.format(caption=caption)
+        if _resolve_teacher_api(self.gen_cfg) == "responses":
+            return await self._call_teacher_batch_responses(
+                client, prompt, self.gen_cfg.samples_per_caption,
+            )
+
+        try:
+            return await self._call_teacher_batch_chat(client, caption)
+        except Exception as exc:
+            if not _is_chat_endpoint_mismatch(exc):
+                raise
+            log.warning(
+                "Teacher model %s rejected chat completions; retrying with Responses API",
+                self.gen_cfg.teacher_model,
+            )
+            return await self._call_teacher_batch_responses(
+                client, prompt, self.gen_cfg.samples_per_caption,
+            )
+
+    async def _call_teacher_retry(
+        self, client: Any, caption: str, failed_code: str, error: str,
+    ) -> str | None:
+        """Re-call the teacher LLM with error feedback for self-debugging (LL3M-inspired)."""
+        retry_prompt = (
+            f"{_TEACHER_USER_TEMPLATE.format(caption=caption)}\n\n"
+            f"Previous attempt:\n```python\n{failed_code}\n```\n\n"
+            f"{_TEACHER_RETRY_TEMPLATE.format(caption=caption, error=error[:1000])}"
+        )
+
+        if _resolve_teacher_api(self.gen_cfg) == "responses":
+            codes = await self._call_teacher_batch_responses(client, retry_prompt, 1)
+            return codes[0] if codes else None
+
+        try:
+            resp = await client.chat.completions.create(
+                model=self.gen_cfg.teacher_model,
+                messages=[
+                    {"role": "developer", "content": _TEACHER_SYSTEM_PROMPT},
+                    {"role": "user", "content": _TEACHER_USER_TEMPLATE.format(caption=caption)},
+                    {"role": "assistant", "content": failed_code},
+                    {
+                        "role": "user",
+                        "content": _TEACHER_RETRY_TEMPLATE.format(
+                            caption=caption, error=error[:1000],
+                        ),
+                    },
+                ],
+                n=1,
+                temperature=self.gen_cfg.temperature,
+                reasoning_effort=self.gen_cfg.teacher_reasoning_effort,
+                max_completion_tokens=16000,
+            )
+            if resp.choices:
+                return _extract_code(resp.choices[0].message.content or "")
+            return None
+        except Exception as exc:
+            if not _is_chat_endpoint_mismatch(exc):
+                raise
+            log.warning(
+                "Teacher model %s rejected chat retry call; retrying with Responses API",
+                self.gen_cfg.teacher_model,
+            )
+            codes = await self._call_teacher_batch_responses(client, retry_prompt, 1)
+            return codes[0] if codes else None
+
     async def _execute_and_validate_async(
-        self, code: str, gt_mesh_path: str,
+        self, code: str, object_id: str,
     ) -> dict[str, Any]:
         """Execute code in Modal Blender and compute metrics, non-blocking."""
         import modal
@@ -194,8 +433,8 @@ class SyntheticGenerator:
         execute_blender_code = modal.Function.from_name(
             "llm3d-blender-worker", "execute_blender_code",
         )
-        compute_metrics = modal.Function.from_name(
-            "llm3d-metrics-worker", "compute_metrics",
+        compare_to_volume_gt = modal.Function.from_name(
+            "llm3d-blender-worker", "compute_metrics_against_volume_mesh",
         )
 
         exec_result: dict[str, Any] = await execute_blender_code.remote.aio(code)
@@ -209,9 +448,8 @@ class SyntheticGenerator:
         if stats.get("vertices", 0) > self.gen_cfg.max_vertices:
             return exec_result
 
-        gt_bytes = await asyncio.to_thread(Path(gt_mesh_path).read_bytes)
-        metrics: dict[str, Any] = await compute_metrics.remote.aio(
-            exec_result["mesh_bytes"], gt_bytes,
+        metrics: dict[str, Any] = await compare_to_volume_gt.remote.aio(
+            object_id, exec_result["mesh_bytes"], "obj", 10_000, self.cfg.storage.modal_volume_mesh_subdir,
         )
         exec_result["metrics"] = metrics
 
@@ -294,10 +532,14 @@ class SyntheticGenerator:
         best_per_uid: dict[str, dict],
         completed_uids: set[str],
         progress: dict[str, int],
+        client: Any | None = None,
+        llm_sem: asyncio.Semaphore | None = None,
     ):
-        """Consumer: pull codes, execute in Modal, validate, track results."""
+        """Consumer: pull codes, execute in Modal, validate, retry on failure."""
         task_name = asyncio.current_task().get_name() if asyncio.current_task() else "consumer"
         _debug_log.info("[%s] started — waiting for work items", task_name)
+
+        max_retries = self.gen_cfg.max_attempts_per_caption
 
         while True:
             item = await queue.get()
@@ -307,55 +549,84 @@ class SyntheticGenerator:
                 break
 
             uid, caption, code, gt_mesh_path = item
-            t0 = time.monotonic()
-            _debug_log.info("[%s] executing Blender for uid=%s", task_name, uid)
+            current_code = code
 
-            try:
-                async with blender_sem:
-                    result = await self._execute_and_validate_async(code, gt_mesh_path)
-            except Exception:
-                elapsed = time.monotonic() - t0
-                log.warning("Execution failed for %s", uid, exc_info=True)
-                _debug_log.error(
-                    "[%s] INFRA ERROR uid=%s elapsed=%.1fs\n%s",
-                    task_name, uid, elapsed,
-                    "Modal execution raised an exception — see main log for traceback",
+            for attempt in range(1, max_retries + 1):
+                t0 = time.monotonic()
+                _debug_log.info(
+                    "[%s] executing Blender for uid=%s (attempt %d/%d)",
+                    task_name, uid, attempt, max_retries,
                 )
+
+                try:
+                    async with blender_sem:
+                        result = await self._execute_and_validate_async(
+                            current_code, uid,
+                        )
+                except Exception:
+                    elapsed = time.monotonic() - t0
+                    log.warning("Execution failed for %s", uid, exc_info=True)
+                    _debug_log.error(
+                        "[%s] INFRA ERROR uid=%s elapsed=%.1fs\n%s",
+                        task_name, uid, elapsed,
+                        "Modal execution raised an exception — see main log for traceback",
+                    )
+                    async with self._tracker_lock:
+                        self.tracker.record_attempt(
+                            uid, caption, success=False,
+                            error_type="infra_error", gt_mesh_path=gt_mesh_path,
+                        )
+                    break
+
+                elapsed = time.monotonic() - t0
+                metrics = result.get("metrics", {})
+                cd = metrics.get("chamfer", float("inf"))
+                f_score = metrics.get("f_score_005", 0.0)
+                error_type = _classify_error(result)
+                passed = (
+                    result.get("success", False)
+                    and cd < self.gen_cfg.cd_threshold
+                    and f_score > self.gen_cfg.f_score_threshold
+                )
+
                 async with self._tracker_lock:
                     self.tracker.record_attempt(
-                        uid, caption, success=False,
-                        error_type="infra_error", gt_mesh_path=gt_mesh_path,
+                        uid, caption, success=passed,
+                        cd=cd, f_score=f_score,
+                        error_type=error_type, gt_mesh_path=gt_mesh_path,
                     )
-                queue.task_done()
-                continue
 
-            elapsed = time.monotonic() - t0
-            metrics = result.get("metrics", {})
-            cd = metrics.get("chamfer", float("inf"))
-            f_score = metrics.get("f_score_005", 0.0)
-            error_type = _classify_error(result)
-            passed = (
-                result.get("success", False)
-                and cd < self.gen_cfg.cd_threshold
-                and f_score > self.gen_cfg.f_score_threshold
-            )
+                if passed:
+                    _debug_log.info(
+                        "[%s] VALIDATION PASSED uid=%s elapsed=%.1fs cd=%.6f f_score=%.6f",
+                        task_name, uid, elapsed, cd, f_score,
+                    )
+                    mesh_bytes = result.get("mesh_bytes")
 
-            async with self._tracker_lock:
-                self.tracker.record_attempt(
-                    uid, caption, success=passed,
-                    cd=cd, f_score=f_score,
-                    error_type=error_type, gt_mesh_path=gt_mesh_path,
-                )
+                    async with self._best_lock:
+                        prev = best_per_uid.get(uid)
+                        if prev is None or cd < prev["cd"]:
+                            best_per_uid[uid] = {
+                                "code": current_code,
+                                "metrics": metrics,
+                                "cd": cd,
+                                "caption": caption,
+                                "gt_mesh_path": gt_mesh_path,
+                                "mesh_bytes": mesh_bytes,
+                            }
 
-            if not passed:
+                    if mesh_bytes:
+                        asyncio.create_task(self._store_artifact_async(uid, mesh_bytes))
+                    break
+
                 _debug_log.warning(
-                    "[%s] VALIDATION FAILED uid=%s elapsed=%.1fs\n"
+                    "[%s] VALIDATION FAILED uid=%s elapsed=%.1fs attempt=%d/%d\n"
                     "  success=%s  error_type=%s\n"
                     "  error=%s\n"
                     "  mesh_stats=%s\n"
                     "  chamfer=%.6f  f_score=%.6f  (thresholds: cd<%.4f f>%.4f)\n"
                     "  caption=%r",
-                    task_name, uid, elapsed,
+                    task_name, uid, elapsed, attempt, max_retries,
                     result.get("success"), error_type,
                     result.get("error", "")[:500],
                     result.get("mesh_stats"),
@@ -363,26 +634,48 @@ class SyntheticGenerator:
                     self.gen_cfg.cd_threshold, self.gen_cfg.f_score_threshold,
                     caption,
                 )
-            else:
-                _debug_log.info(
-                    "[%s] VALIDATION PASSED uid=%s elapsed=%.1fs cd=%.6f f_score=%.6f",
-                    task_name, uid, elapsed, cd, f_score,
-                )
-                mesh_bytes = result.get("mesh_bytes")
 
-                async with self._best_lock:
-                    prev = best_per_uid.get(uid)
-                    if prev is None or cd < prev["cd"]:
-                        best_per_uid[uid] = {
-                            "code": code,
-                            "metrics": metrics,
-                            "cd": cd,
-                            "caption": caption,
-                            "gt_mesh_path": gt_mesh_path,
-                        }
-
-                if mesh_bytes:
-                    asyncio.create_task(self._store_artifact_async(uid, mesh_bytes))
+                if attempt < max_retries and client and llm_sem and error_type in (
+                    "runtime", "syntax", "no_geometry", "metrics_error",
+                ):
+                    error_msg = result.get("error", "")
+                    if error_type == "no_geometry":
+                        stats = result.get("mesh_stats", {})
+                        error_msg = (
+                            f"Script ran but exported mesh has {stats.get('vertices', 0)} "
+                            f"vertices and {stats.get('faces', 0)} faces. "
+                            "Ensure: (1) geometry is actually created, "
+                            "(2) export uses export_materials=False and apply_modifiers=True, "
+                            "(3) objects are selected before export."
+                        )
+                    elif error_type == "metrics_error":
+                        error_msg = (
+                            result.get("metrics", {}).get("error", "")
+                            or "Metric computation failed after export."
+                        )
+                    _debug_log.info(
+                        "[%s] attempting retry with error feedback for uid=%s",
+                        task_name, uid,
+                    )
+                    try:
+                        async with llm_sem:
+                            retry_code = await self._call_teacher_retry(
+                                client, caption, current_code, error_msg,
+                            )
+                        if retry_code:
+                            _debug_log.info(
+                                "[%s] RETRY CODE uid=%s\n"
+                                "--- BEGIN RETRY CODE ---\n%s\n--- END RETRY CODE ---",
+                                task_name, uid, retry_code,
+                            )
+                            current_code = retry_code
+                            continue
+                    except Exception:
+                        _debug_log.warning(
+                            "[%s] retry LLM call failed for uid=%s",
+                            task_name, uid, exc_info=True,
+                        )
+                break
 
             progress["processed"] += 1
             if progress["processed"] % self.gen_cfg.batch_size == 0:
@@ -404,15 +697,27 @@ class SyntheticGenerator:
     async def _flush_best_results(
         self, best_per_uid: dict[str, dict], out_f,
     ) -> list[dict]:
-        """Write the best result per UID to the output JSONL."""
+        """Write the best result per UID to the output JSONL and save OBJ files locally."""
+        obj_dir = Path(self.gen_cfg.output_path).parent / "objs"
+        obj_dir.mkdir(parents=True, exist_ok=True)
+
         validated: list[dict] = []
         for uid, best in best_per_uid.items():
+            mesh_bytes = best.get("mesh_bytes")
+            obj_path: str | None = None
+            if mesh_bytes:
+                obj_file = obj_dir / f"{uid}.obj"
+                await asyncio.to_thread(obj_file.write_bytes, mesh_bytes)
+                obj_path = str(obj_file)
+                log.info("Saved OBJ locally: %s", obj_path)
+
             pair = {
                 "uid": uid,
                 "caption": best["caption"],
                 "code": best["code"],
                 "metrics": best["metrics"],
                 "gt_mesh_path": best["gt_mesh_path"],
+                "obj_path": obj_path,
             }
             validated.append(pair)
             async with self._output_lock:
@@ -428,10 +733,12 @@ class SyntheticGenerator:
         selection keeps the lowest-CD passing result per UID.
         """
         if manifest_path is None:
-            manifest_path = Path(self.cfg.data_dir) / "manifest.jsonl"
+            manifest_path = resolve_manifest_path(self.cfg.storage)
 
         manifest: list[dict] = []
-        with open(manifest_path, encoding="utf-8") as f:
+        from data.storage import open_read
+
+        with open_read(str(manifest_path), self.cfg.storage) as f:
             for line in f:
                 line = line.strip()
                 if line:
@@ -486,6 +793,7 @@ class SyntheticGenerator:
                     self._consume(
                         queue, blender_sem, best_per_uid,
                         completed_uids, progress,
+                        client=client, llm_sem=llm_sem,
                     ),
                     name=f"consumer-{i}",
                 )

@@ -11,7 +11,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import shutil
-import subprocess
+import tempfile
 from pathlib import Path
 from typing import IO, Any
 
@@ -28,6 +28,21 @@ def _cache_key(uri: str) -> str:
 def _hf_bucket_url(cfg: StorageConfig) -> str:
     ns = cfg.hf_bucket_namespace
     return f"hf://buckets/{ns}/{cfg.hf_bucket}" if ns else f"hf://buckets/{cfg.hf_bucket}"
+
+
+def bucket_uri(remote_key: str, cfg: StorageConfig) -> str:
+    """Return a fully qualified HF bucket URI for a bucket-relative key."""
+    clean_key = remote_key.strip("/")
+    if not clean_key:
+        return _hf_bucket_url(cfg)
+    return f"{_hf_bucket_url(cfg)}/{clean_key}"
+
+
+def resolve_manifest_path(cfg: StorageConfig) -> str:
+    """Return the manifest path for the configured storage backend."""
+    if cfg.backend == "hf":
+        return bucket_uri(cfg.manifest_key, cfg)
+    return cfg.local_manifest_path
 
 
 # ---------------------------------------------------------------------------
@@ -77,20 +92,22 @@ def upload(local_path: str | Path, remote_key: str, cfg: StorageConfig) -> None:
         shutil.copyfileobj(src, dst)
 
 
-def sync_dir(
-    local_dir: str | Path,
-    remote_prefix: str,
-    cfg: StorageConfig,
-    *,
-    dry_run: bool = False,
-) -> None:
-    """Sync a local directory to the HF Bucket using the ``hf`` CLI."""
-    dest = f"{_hf_bucket_url(cfg)}/{remote_prefix}"
-    cmd = ["hf", "buckets", "sync", str(local_dir), dest]
-    if dry_run:
-        cmd.append("--dry-run")
-    log.info("Running: %s", " ".join(cmd))
-    subprocess.run(cmd, check=True)
+def write_text(path_or_uri: str, text: str, cfg: StorageConfig) -> None:
+    """Write text either locally or to an HF bucket URI."""
+    if not path_or_uri.startswith("hf://"):
+        path = Path(path_or_uri)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text, encoding="utf-8")
+        return
+
+    with tempfile.NamedTemporaryFile("w", encoding="utf-8", delete=False) as tmp:
+        tmp.write(text)
+        tmp_path = Path(tmp.name)
+    try:
+        remote_key = path_or_uri.removeprefix(_hf_bucket_url(cfg)).lstrip("/")
+        upload(tmp_path, remote_key, cfg)
+    finally:
+        tmp_path.unlink(missing_ok=True)
 
 
 def invalidate_cache(path_or_uri: str, cfg: StorageConfig) -> None:

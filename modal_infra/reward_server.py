@@ -16,6 +16,8 @@ from __future__ import annotations
 import base64
 import os
 import time
+from pathlib import Path
+from typing import Any
 
 import modal
 from modal import asgi_app
@@ -47,6 +49,7 @@ render_mesh_views = modal.Function.from_name("llm3d-render-worker", "render_mesh
 volume = modal.Volume.from_name("llm3d-data", create_if_missing=True)
 
 _START_TIME = time.time()
+_GT_MESH_VOLUME_SUBDIR = os.environ.get("GT_MESH_VOLUME_SUBDIR", "meshes").strip("/") or "meshes"
 
 
 def _verify_token(token: str | None):
@@ -56,13 +59,54 @@ def _verify_token(token: str | None):
         raise HTTPException(status_code=403, detail="Invalid token")
 
 
-def _load_gt_mesh(object_id: str) -> bytes | None:
-    """Load ground-truth mesh from volume."""
-    path = f"/data/meshes/{object_id}.obj"
-    if not os.path.exists(path):
+_SUPPORTED_MESH_EXTS = (".obj", ".glb", ".gltf", ".ply", ".stl")
+
+
+def _load_gt_mesh(object_id: str) -> tuple[bytes, str] | None:
+    """Load a ground-truth mesh from the volume, preserving its true format."""
+    for ext in _SUPPORTED_MESH_EXTS:
+        path = Path(f"/data/{_GT_MESH_VOLUME_SUBDIR}/{object_id}{ext}")
+        if path.exists():
+            return path.read_bytes(), ext.lstrip(".")
+    return None
+
+
+def _list_synthetic_artifacts(limit: int = 200) -> list[dict[str, Any]]:
+    root = Path("/data/synthetic")
+    if not root.exists():
+        return []
+
+    items: list[dict[str, Any]] = []
+    for path in sorted(root.glob("*.obj"), key=lambda p: p.stat().st_mtime, reverse=True):
+        stat = path.stat()
+        items.append({
+            "uid": path.stem,
+            "filename": path.name,
+            "size": stat.st_size,
+            "mtime": stat.st_mtime,
+        })
+        if len(items) >= limit:
+            break
+    return items
+
+
+def _load_synthetic_artifact(uid: str) -> bytes | None:
+    path = Path(f"/data/synthetic/{uid}.obj")
+    if not path.exists():
         return None
-    with open(path, "rb") as f:
-        return f.read()
+    return path.read_bytes()
+
+
+def _pair_artifact_status(uid: str) -> dict[str, Any]:
+    gt = _load_gt_mesh(uid)
+    gen = _load_synthetic_artifact(uid)
+    return {
+        "uid": uid,
+        "generated_available": gen is not None,
+        "generated_format": "obj" if gen is not None else None,
+        "gt_available": gt is not None,
+        "gt_format": gt[1] if gt is not None else None,
+    }
 
 
 def _compute_reward(
@@ -122,6 +166,7 @@ def _format_reward(code: str) -> float:
 @asgi_app()
 def reward_api():
     from fastapi import FastAPI, Query
+    from fastapi.responses import Response
     from pydantic import BaseModel
 
     api = FastAPI(title="LLM-3D Reward API")
@@ -153,6 +198,46 @@ def reward_api():
     async def health():
         return {"status": "ok", "uptime": time.time() - _START_TIME}
 
+    @api.get("/artifacts")
+    async def list_artifacts(token: str = Query(None), limit: int = Query(200, ge=1, le=1000)):
+        _verify_token(token)
+        return {"artifacts": _list_synthetic_artifacts(limit)}
+
+    @api.get("/artifacts/pair/{uid}")
+    async def get_pair_status(uid: str, token: str = Query(None)):
+        _verify_token(token)
+        return _pair_artifact_status(uid)
+
+    @api.get("/artifacts/generated/{uid}")
+    async def get_generated_artifact(uid: str, token: str = Query(None)):
+        _verify_token(token)
+        data = _load_synthetic_artifact(uid)
+        if data is None:
+            return Response(content="Artifact not found", status_code=404)
+        return Response(
+            content=data,
+            media_type="text/plain; charset=utf-8",
+            headers={"Content-Disposition": f'attachment; filename="{uid}.obj"'},
+        )
+
+    @api.get("/artifacts/gt/{uid}")
+    async def get_gt_artifact(uid: str, token: str = Query(None)):
+        _verify_token(token)
+        gt = _load_gt_mesh(uid)
+        if gt is None:
+            return Response(content="Artifact not found", status_code=404)
+        data, mesh_format = gt
+        media_type = "model/gltf-binary" if mesh_format == "glb" else "application/octet-stream"
+        return Response(
+            content=data,
+            media_type=media_type,
+            headers={"Content-Disposition": f'attachment; filename="{uid}.{mesh_format}"'},
+        )
+
+    @api.get("/artifacts/{uid}")
+    async def get_artifact(uid: str, token: str = Query(None)):
+        return await get_generated_artifact(uid, token)
+
     @api.post("/reward/batch")
     async def reward_batch(req: BatchRequest, token: str = Query(None)):
         _verify_token(token)
@@ -168,8 +253,9 @@ def reward_api():
             if er["success"] and er.get("mesh_bytes"):
                 gt = _load_gt_mesh(item.object_id)
                 if gt:
+                    gt_bytes, gt_format = gt
                     metrics_futures.append(
-                        compute_metrics.spawn(er["mesh_bytes"], gt)
+                        compute_metrics.spawn(er["mesh_bytes"], gt_bytes, 10_000, "obj", gt_format)
                     )
                 else:
                     metrics_futures.append(None)
@@ -196,6 +282,7 @@ def reward_api():
                 "success": er["success"],
                 "metrics": mr,
                 "elapsed": er.get("elapsed", 0),
+                "error": er.get("error", ""),
             })
 
         valid = [r for r in rewards if r["success"]]
@@ -213,7 +300,8 @@ def reward_api():
         if er["success"] and er.get("mesh_bytes"):
             gt = _load_gt_mesh(req.object_id)
             if gt:
-                mr = compute_metrics.remote(er["mesh_bytes"], gt)
+                gt_bytes, gt_format = gt
+                mr = compute_metrics.remote(er["mesh_bytes"], gt_bytes, 10_000, "obj", gt_format)
         base = _compute_reward(req.code, er, mr)
         fmt = _format_reward(req.code)
         return {
@@ -231,8 +319,9 @@ def reward_api():
         gt = _load_gt_mesh(req.object_id)
         if gt is None:
             return {"error": f"GT mesh not found for {req.object_id}"}
+        gt_bytes, gt_format = gt
         imgs = render_mesh_views.remote(
-            gt, "obj", req.num_views, tuple(req.resolution),
+            gt_bytes, gt_format, req.num_views, tuple(req.resolution),
         )
         return {
             "images_b64": [base64.b64encode(img).decode() for img in imgs],

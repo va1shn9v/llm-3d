@@ -1,0 +1,727 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>3D Object Viewer</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg: #08080c;
+      --surface: #111118;
+      --surface-2: #1a1a24;
+      --border: #252533;
+      --border-active: #6366f1;
+      --text: #e2e8f0;
+      --text-dim: #8b8fa3;
+      --accent: #6366f1;
+      --accent-hover: #818cf8;
+      --success: #10b981;
+      --error: #ef4444;
+      --warning: #f59e0b;
+      --radius: 8px;
+      --font-mono: 'SF Mono', 'Fira Code', 'JetBrains Mono', 'Cascadia Code', monospace;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      height: 100vh;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+    }
+
+    /* Header */
+    header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 20px;
+      height: 48px;
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      flex-shrink: 0;
+    }
+
+    .logo {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-weight: 600;
+      font-size: 14px;
+      letter-spacing: -0.3px;
+    }
+
+    .logo svg { width: 20px; height: 20px; }
+
+    .header-actions {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .blender-status {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 12px;
+      color: var(--text-dim);
+      padding: 4px 10px;
+      border-radius: 20px;
+      background: var(--surface-2);
+    }
+
+    .blender-status .dot {
+      width: 6px; height: 6px; border-radius: 50%;
+      background: var(--error);
+    }
+
+    .blender-status.available .dot { background: var(--success); }
+
+    /* Main Layout */
+    main {
+      flex: 1;
+      display: flex;
+      overflow: hidden;
+    }
+
+    /* Left Panel */
+    .left-panel {
+      width: 420px;
+      min-width: 320px;
+      display: flex;
+      flex-direction: column;
+      border-right: 1px solid var(--border);
+      background: var(--surface);
+    }
+
+    .tabs {
+      display: flex;
+      border-bottom: 1px solid var(--border);
+      flex-shrink: 0;
+    }
+
+    .tab {
+      flex: 1;
+      padding: 10px 16px;
+      font-size: 13px;
+      font-weight: 500;
+      color: var(--text-dim);
+      cursor: pointer;
+      border: none;
+      background: none;
+      border-bottom: 2px solid transparent;
+      transition: all 0.15s;
+    }
+
+    .tab:hover { color: var(--text); background: var(--surface-2); }
+    .tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+
+    .tab-content {
+      flex: 1;
+      display: none;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    .tab-content.active { display: flex; }
+
+    /* OBJ Tab */
+    .drop-zone {
+      margin: 16px;
+      padding: 40px 20px;
+      border: 2px dashed var(--border);
+      border-radius: var(--radius);
+      text-align: center;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+
+    .drop-zone:hover, .drop-zone.dragover {
+      border-color: var(--accent);
+      background: rgba(99, 102, 241, 0.05);
+    }
+
+    .drop-zone svg {
+      width: 36px; height: 36px;
+      color: var(--text-dim);
+      margin-bottom: 12px;
+    }
+
+    .drop-zone p { font-size: 13px; color: var(--text-dim); line-height: 1.5; }
+    .drop-zone .browse { color: var(--accent); cursor: pointer; }
+    .drop-zone .browse:hover { text-decoration: underline; }
+
+    .obj-paste-section {
+      padding: 0 16px 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    .library-section {
+      padding: 0 16px 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      min-height: 0;
+    }
+
+    .remote-section {
+      padding: 0 16px 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    .section-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+    }
+
+    .remote-row {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+    }
+
+    .remote-input {
+      flex: 1;
+      min-width: 0;
+      background: var(--bg);
+      color: var(--text);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 10px 12px;
+      font-family: var(--font-mono);
+      font-size: 12px;
+      outline: none;
+    }
+
+    .remote-input:focus {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.15);
+    }
+
+    .pair-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+
+    .section-meta {
+      font-size: 12px;
+      color: var(--text-dim);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .file-list {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      min-height: 72px;
+      max-height: 220px;
+      overflow: auto;
+      padding-right: 4px;
+    }
+
+    .file-item {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 10px;
+      align-items: center;
+      padding: 10px 12px;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      background: rgba(255, 255, 255, 0.02);
+    }
+
+    .file-info {
+      min-width: 0;
+    }
+
+    .file-name {
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--text);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .file-path {
+      margin-top: 3px;
+      font-size: 11px;
+      color: var(--text-dim);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .file-actions {
+      display: flex;
+      gap: 8px;
+    }
+
+    .pair-status {
+      font-size: 12px;
+      color: var(--text-dim);
+      min-height: 18px;
+    }
+
+    .section-label {
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      color: var(--text-dim);
+      margin-bottom: 8px;
+    }
+
+    .obj-textarea, .code-textarea {
+      flex: 1;
+      width: 100%;
+      background: var(--bg);
+      color: var(--text);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 12px;
+      font-family: var(--font-mono);
+      font-size: 12px;
+      line-height: 1.6;
+      resize: none;
+      outline: none;
+      tab-size: 4;
+    }
+
+    .obj-textarea:focus, .code-textarea:focus {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.15);
+    }
+
+    .obj-textarea::placeholder, .code-textarea::placeholder {
+      color: #4a4a5a;
+    }
+
+    .load-obj-btn {
+      margin-top: 8px;
+      align-self: flex-end;
+    }
+
+    /* Python Tab */
+    .code-section {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      padding: 16px;
+      gap: 8px;
+      overflow: hidden;
+    }
+
+    .code-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .code-actions {
+      display: flex;
+      gap: 6px;
+    }
+
+    /* Buttons */
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 7px 14px;
+      font-size: 12px;
+      font-weight: 500;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      cursor: pointer;
+      background: var(--surface-2);
+      color: var(--text);
+      transition: all 0.15s;
+      white-space: nowrap;
+    }
+
+    .btn:hover { background: var(--border); }
+    .btn:active { transform: scale(0.97); }
+
+    .btn-primary {
+      background: var(--accent);
+      border-color: var(--accent);
+      color: #fff;
+    }
+
+    .btn-primary:hover { background: var(--accent-hover); border-color: var(--accent-hover); }
+
+    .btn-primary:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+      transform: none;
+    }
+
+    .btn svg { width: 14px; height: 14px; }
+
+    /* Console */
+    .console-section {
+      border-top: 1px solid var(--border);
+      flex-shrink: 0;
+      max-height: 200px;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .console-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 8px 16px;
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      color: var(--text-dim);
+      cursor: pointer;
+      user-select: none;
+    }
+
+    .console-header:hover { color: var(--text); }
+
+    .console-output {
+      font-family: var(--font-mono);
+      font-size: 11px;
+      line-height: 1.6;
+      padding: 0 16px 12px;
+      overflow-y: auto;
+      color: var(--text-dim);
+      max-height: 150px;
+    }
+
+    .console-output .error { color: var(--error); }
+    .console-output .success { color: var(--success); }
+    .console-output .info { color: var(--accent); }
+
+    /* Right Panel (Viewport) */
+    .right-panel {
+      flex: 1;
+      position: relative;
+      background: var(--bg);
+      overflow: hidden;
+    }
+
+    #viewport {
+      width: 100%;
+      height: 100%;
+    }
+
+    #viewport canvas { display: block; }
+
+    /* Viewport Toolbar */
+    .viewport-toolbar {
+      position: absolute;
+      top: 12px;
+      right: 12px;
+      display: flex;
+      gap: 4px;
+      z-index: 10;
+    }
+
+    .tool-btn {
+      width: 34px; height: 34px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      background: rgba(17, 17, 24, 0.85);
+      backdrop-filter: blur(8px);
+      color: var(--text-dim);
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+
+    .tool-btn:hover { color: var(--text); background: var(--surface-2); border-color: var(--border); }
+    .tool-btn.active { color: var(--accent); border-color: var(--accent); background: rgba(99, 102, 241, 0.1); }
+    .tool-btn svg { width: 16px; height: 16px; }
+    .tool-btn[title]::after { content: none; }
+
+    /* Mesh Info Overlay */
+    .mesh-info {
+      position: absolute;
+      bottom: 12px;
+      left: 12px;
+      display: none;
+      gap: 12px;
+      padding: 8px 14px;
+      background: rgba(17, 17, 24, 0.85);
+      backdrop-filter: blur(8px);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      font-size: 12px;
+      font-family: var(--font-mono);
+      z-index: 10;
+    }
+
+    .mesh-info.visible { display: flex; }
+    .mesh-info span { color: var(--text-dim); }
+    .mesh-info strong { color: var(--text); font-weight: 500; }
+
+    /* Loading Overlay */
+    .loading-overlay {
+      position: absolute;
+      inset: 0;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      background: rgba(8, 8, 12, 0.7);
+      backdrop-filter: blur(4px);
+      z-index: 20;
+    }
+
+    .loading-overlay.visible { display: flex; }
+
+    .spinner {
+      width: 32px; height: 32px;
+      border: 3px solid var(--border);
+      border-top-color: var(--accent);
+      border-radius: 50%;
+      animation: spin 0.7s linear infinite;
+    }
+
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* Empty State */
+    .empty-state {
+      position: absolute;
+      inset: 0;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      color: var(--text-dim);
+      pointer-events: none;
+      z-index: 5;
+    }
+
+    .empty-state svg { width: 48px; height: 48px; margin-bottom: 16px; opacity: 0.3; }
+    .empty-state p { font-size: 13px; opacity: 0.5; }
+
+    /* Resizer */
+    .resizer {
+      width: 4px;
+      cursor: col-resize;
+      background: transparent;
+      position: relative;
+      flex-shrink: 0;
+      z-index: 30;
+    }
+
+    .resizer::after {
+      content: '';
+      position: absolute;
+      top: 0; bottom: 0;
+      left: 1px;
+      width: 2px;
+      background: var(--border);
+      transition: background 0.15s;
+    }
+
+    .resizer:hover::after { background: var(--accent); }
+
+    /* Scrollbar */
+    ::-webkit-scrollbar { width: 6px; height: 6px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+    ::-webkit-scrollbar-thumb:hover { background: #3a3a4a; }
+
+    /* File input hidden */
+    #file-input { display: none; }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="logo">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/>
+        <polyline points="3.27 6.96 12 12.01 20.73 6.96"/>
+        <line x1="12" y1="22.08" x2="12" y2="12"/>
+      </svg>
+      3D Object Viewer
+    </div>
+    <div class="header-actions">
+      <div class="blender-status" id="blender-status">
+        <div class="dot"></div>
+        <span>Checking Blender…</span>
+      </div>
+    </div>
+  </header>
+
+  <main>
+    <div class="left-panel" id="left-panel">
+      <div class="tabs">
+        <button class="tab active" data-tab="obj">Mesh File</button>
+        <button class="tab" data-tab="python">Python Code</button>
+      </div>
+
+      <!-- OBJ Tab -->
+      <div class="tab-content active" id="tab-obj">
+        <div class="drop-zone" id="drop-zone">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+            <polyline points="17 8 12 3 7 8"/>
+            <line x1="12" y1="3" x2="12" y2="15"/>
+          </svg>
+          <p>Drop <strong>.obj</strong> or <strong>.glb</strong> here<br/>or <span class="browse" id="browse-btn">browse files</span></p>
+        </div>
+        <div class="obj-paste-section">
+          <div class="section-label">Or paste OBJ data</div>
+          <textarea class="obj-textarea" id="obj-textarea"
+            placeholder="# Paste OBJ content here&#10;# e.g.&#10;# v 0.0 0.0 0.0&#10;# v 1.0 0.0 0.0&#10;# f 1 2 3"
+            spellcheck="false"></textarea>
+          <button class="btn btn-primary load-obj-btn" id="load-obj-btn">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="5 12 12 5 19 12"/><line x1="12" y1="19" x2="12" y2="5"/></svg>
+            Load OBJ
+          </button>
+        </div>
+        <div class="remote-section">
+          <div class="section-row">
+            <div>
+              <div class="section-label">Fetch By UID</div>
+              <div class="section-meta" id="remote-status">Reward API fetch is not configured.</div>
+            </div>
+          </div>
+          <div class="remote-row">
+            <input class="remote-input" id="uid-input" placeholder="Enter object UID" spellcheck="false" />
+            <button class="btn btn-primary" id="fetch-pair-btn">Fetch Pair</button>
+          </div>
+          <div class="pair-status" id="pair-status"></div>
+          <div class="pair-actions">
+            <button class="btn" id="load-generated-btn" disabled>Load Generated</button>
+            <button class="btn" id="load-gt-btn" disabled>Load GT</button>
+            <button class="btn" id="download-generated-btn" disabled>Download Generated</button>
+            <button class="btn" id="download-gt-btn" disabled>Download GT</button>
+          </div>
+        </div>
+        <div class="library-section">
+          <div class="section-row">
+            <div>
+              <div class="section-label">Local Mesh Library</div>
+              <div class="section-meta" id="library-root">No local mesh directory configured.</div>
+            </div>
+            <button class="btn" id="refresh-files-btn" title="Refresh local OBJ list">Refresh</button>
+          </div>
+          <div class="file-list" id="file-list"></div>
+        </div>
+      </div>
+
+      <!-- Python Tab -->
+      <div class="tab-content" id="tab-python">
+        <div class="code-section">
+          <div class="code-header">
+            <div class="section-label">Blender Python Code</div>
+            <div class="code-actions">
+              <button class="btn" id="clear-code-btn" title="Clear">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                Clear
+              </button>
+              <button class="btn" id="download-result-btn" disabled title="Download the last generated OBJ">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                Download OBJ
+              </button>
+              <button class="btn btn-primary" id="execute-btn">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+                Execute
+              </button>
+            </div>
+          </div>
+          <textarea class="code-textarea" id="code-textarea" spellcheck="false"
+            placeholder="# Write Blender Python code here (Ctrl+Enter to execute)&#10;# The result will be auto-exported and displayed."></textarea>
+        </div>
+      </div>
+
+      <!-- Console -->
+      <div class="console-section" id="console-section">
+        <div class="console-header" id="console-toggle">
+          Console
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
+        </div>
+        <div class="console-output" id="console-output"></div>
+      </div>
+    </div>
+
+    <div class="resizer" id="resizer"></div>
+
+    <div class="right-panel">
+      <div id="viewport">
+        <div class="empty-state" id="empty-state">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/>
+            <polyline points="3.27 6.96 12 12.01 20.73 6.96"/>
+            <line x1="12" y1="22.08" x2="12" y2="12"/>
+          </svg>
+          <p>Upload an OBJ file or execute Python code to view a 3D object</p>
+        </div>
+      </div>
+
+      <div class="viewport-toolbar">
+        <button class="tool-btn" id="btn-wireframe" title="Wireframe">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="3" y="3" width="18" height="18" rx="2" ry="2"/>
+            <line x1="3" y1="12" x2="21" y2="12"/>
+            <line x1="12" y1="3" x2="12" y2="21"/>
+          </svg>
+        </button>
+        <button class="tool-btn" id="btn-normals" title="Show Normals">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <line x1="12" y1="19" x2="12" y2="5"/>
+            <polyline points="5 12 12 5 19 12"/>
+          </svg>
+        </button>
+        <button class="tool-btn" id="btn-rotate" title="Auto-Rotate">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <polyline points="23 4 23 10 17 10"/>
+            <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/>
+          </svg>
+        </button>
+        <button class="tool-btn" id="btn-reset" title="Reset Camera">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="12" r="3"/>
+            <path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/>
+          </svg>
+        </button>
+      </div>
+
+      <div class="mesh-info" id="mesh-info">
+        <span>Vertices: <strong id="info-verts">0</strong></span>
+        <span>Faces: <strong id="info-faces">0</strong></span>
+      </div>
+
+      <div class="loading-overlay" id="loading-overlay">
+        <div class="spinner"></div>
+      </div>
+    </div>
+  </main>
+
+  <input type="file" id="file-input" accept=".obj,.glb,.gltf" />
+
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://cdn.jsdelivr.net/npm/three@0.169.0/build/three.module.js",
+      "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.169.0/examples/jsm/"
+    }
+  }
+  </script>
+  <script type="module" src="/viewer.js"></script>
+</body>
+</html>

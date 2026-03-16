@@ -15,13 +15,16 @@ echo ""
 echo "This will:"
 echo "  1. Call teacher LLM to generate Blender Python code for each caption"
 echo "  2. Execute code in Blender via Modal"
-echo "  3. Validate against ground-truth meshes (CD, F-Score)"
+echo "  3. Compare against ground-truth meshes already preloaded into Modal Volume"
 echo "  4. Track hard prompts (high failure rate) in CSV for RLVR hard mining"
 echo ""
 
 echo "Deploying Modal apps..."
 modal deploy modal_infra/blender_worker.py
 modal deploy modal_infra/metrics_worker.py
+echo ""
+
+bash ./scripts/preload_modal_meshes.sh "$CONFIG"
 echo ""
 
 python -c "

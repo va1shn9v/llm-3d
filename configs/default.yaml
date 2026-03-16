@@ -22,6 +22,16 @@ objaverse_filter:
   exclude_animated: true
   output_path: "datasets/filtered_uids.json"
 
+storage:
+  backend: "hf"
+  hf_bucket: "llm3d-data"
+  hf_bucket_namespace: ""
+  cache_dir: ".cache/hf_data"
+  local_manifest_path: "data/manifest.jsonl"
+  manifest_key: "datasets/manifest.jsonl"
+  mesh_prefix: "meshes"
+  modal_volume_mesh_subdir: "meshes"
+
 synthetic_gen:
   teacher_model: "gpt-4o-mini"
   teacher_provider: "openai"

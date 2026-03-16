@@ -20,6 +20,7 @@ metrics_image = (
         "torch>=2.1",
         "transformers>=4.36",
         "pillow>=10.0",
+        "charset-normalizer>=3.0",
     )
 )
 
@@ -36,11 +37,33 @@ def _normalize_mesh(mesh):
     return mesh
 
 
-def _load_mesh(data: bytes):
-    """Load mesh from OBJ bytes, normalize."""
+def _guess_mesh_format(data: bytes, fallback: str = "obj") -> str:
+    """Infer mesh format from bytes when the caller doesn't know it."""
+    header = data[:32]
+    if header.startswith(b"glTF"):
+        return "glb"
+
+    stripped = data.lstrip()
+    if stripped.startswith(b"ply"):
+        return "ply"
+    if stripped.startswith(b"solid "):
+        return "stl"
+    if stripped.startswith((b"v ", b"o ", b"g ", b"mtllib", b"usemtl", b"#")):
+        return "obj"
+    if stripped.startswith((b"{", b"[")) and b'"asset"' in data[:512]:
+        return "gltf"
+    return fallback
+
+
+def _load_mesh(data: bytes, mesh_format: str | None = None):
+    """Load mesh from bytes, normalize, and tolerate multiple mesh formats."""
     import trimesh
 
-    mesh = trimesh.load(io.BytesIO(data), file_type="obj", force="mesh", process=True)
+    file_type = (mesh_format or _guess_mesh_format(data)).lower().lstrip(".")
+    try:
+        mesh = trimesh.load(io.BytesIO(data), file_type=file_type, force="mesh", process=True)
+    except Exception:
+        return None
     if hasattr(mesh, "geometry"):
         parts = [g for g in mesh.geometry.values() if hasattr(g, "vertices")]
         if parts:
@@ -53,8 +76,13 @@ def _load_mesh(data: bytes):
 
 
 @app.function(image=metrics_image, cpu=2, memory=2048, timeout=60)
-def compute_metrics(gen_mesh_bytes: bytes, gt_mesh_bytes: bytes,
-                    num_points: int = 10_000) -> dict[str, Any]:
+def compute_metrics(
+    gen_mesh_bytes: bytes,
+    gt_mesh_bytes: bytes,
+    num_points: int = 10_000,
+    gen_mesh_format: str = "obj",
+    gt_mesh_format: str | None = None,
+) -> dict[str, Any]:
     """Compute geometric similarity metrics.
 
     Both meshes are normalized to [-1,1]^3. Returns chamfer, f_score_{001,005},
@@ -63,8 +91,8 @@ def compute_metrics(gen_mesh_bytes: bytes, gt_mesh_bytes: bytes,
     import numpy as np
     from scipy.spatial import cKDTree
 
-    gen = _load_mesh(gen_mesh_bytes)
-    gt = _load_mesh(gt_mesh_bytes)
+    gen = _load_mesh(gen_mesh_bytes, gen_mesh_format)
+    gt = _load_mesh(gt_mesh_bytes, gt_mesh_format)
 
     if gen is None or gt is None:
         return {
@@ -73,7 +101,10 @@ def compute_metrics(gen_mesh_bytes: bytes, gt_mesh_bytes: bytes,
             "f_score_005": 0.0,
             "hausdorff_90": float("inf"),
             "normal_consistency": 0.0,
-            "error": "Could not load one or both meshes",
+            "error": (
+                f"Could not load one or both meshes "
+                f"(gen_format={gen_mesh_format}, gt_format={gt_mesh_format or 'auto'})"
+            ),
         }
 
     import trimesh

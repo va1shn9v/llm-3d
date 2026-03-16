@@ -30,6 +30,7 @@ data/                      # Data pipeline
 └── synthetic_generator.py # Teacher LLM synthetic data generation
 
 modal_infra/               # Modal serverless functions
+├── data_worker.py         # Remote Objaverse ingest -> HF bucket manifest
 ├── images.py              # Docker image definitions (Blender 4.2)
 ├── blender_worker.py      # Code execution in isolated containers
 ├── metrics_worker.py      # Chamfer Distance, F-Score, Hausdorff, Normal Consistency
@@ -78,6 +79,8 @@ Required variables in `dev.env`:
 | Variable | Purpose |
 |---|---|
 | `TINKER_API_KEY` | Tinker platform API key (read by SDK automatically) |
+| `HF_TOKEN` | Hugging Face token for bucket uploads and dataset access |
+| `LLM3D_STORAGE__HF_BUCKET_NAMESPACE` | HF username/org namespace for bucket URIs |
 | `MODAL_TOKEN_ID` | Modal platform authentication |
 | `MODAL_TOKEN_SECRET` | Modal platform authentication |
 | `LLM3D_MODAL__ENDPOINT` | Deployed Modal reward API URL |
@@ -89,45 +92,68 @@ The config system (`config.py`) loads `dev.env` automatically via `load_config()
 
 ## Pipeline
 
-### Phase 1: Preprocess — render multi-view images
+### Phase 0: Build remote mesh manifest
 
 ```bash
-./scripts/preprocess_dataset.sh
-# or directly:
-python -m data.dataset_preprocessor --mesh-dir ./meshes --output-dir ./data/renders
-python -m data.dataset_preprocessor --mesh-dir ./meshes --num-views 5 --resolution 512 512
-python -m data.dataset_preprocessor --hf-dataset InternRobotics/MeshCoderDataset --output-dir ./data/renders
+./scripts/filter_objaverse.sh
+./scripts/build_manifest.sh
 ```
 
-### Phase 2: Build object dataset
+`build_manifest.sh` now runs a remote Modal ingest worker that streams Objaverse meshes
+directly into your configured HF bucket and writes a manifest with `hf://...` mesh paths.
+
+### Phase 1: Preload Modal volume with GT meshes
+
+```bash
+modal deploy modal_infra/blender_worker.py
+./scripts/preload_modal_meshes.sh
+```
+
+### Phase 2: Synthetic data generation
+
+```bash
+./scripts/generate_synthetic_data.sh
+```
+
+Synthetic generation compares against GT meshes already present in Modal Volume, so the
+runner no longer downloads the source meshes locally.
+
+### Phase 3: Build object dataset
 
 ```bash
 ./scripts/build_object_dataset.sh
 ```
 
-### Phase 3: Deploy reward API
+### Phase 4: Deploy reward API
 
 ```bash
 ./scripts/deploy_reward_api.sh
 ```
 
-### Phase 4: SFT training
+### Phase 5: SFT training
 
 ```bash
 ./scripts/run_sft.sh
 ```
 
-### Phase 5: RL training
+### Phase 6: RL training
 
 ```bash
 ./scripts/run_rl.sh
 ```
 
-### Phase 6: Evaluation
+### Phase 7: Evaluation
 
 ```bash
 ./scripts/run_eval.sh
 ```
+
+For production runs, use a stable remote runner for `training/*.py` entrypoints and keep
+your laptop as a launcher / inspection machine. The heavy mesh path should be:
+
+1. Objaverse source -> Modal ingest worker -> HF bucket
+2. HF bucket -> Modal Volume preload
+3. Modal Volume -> reward / synthetic GT comparisons
 
 ## Configuration
 

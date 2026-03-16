@@ -48,7 +48,7 @@ class Blender3DEnvironment:
         ep = modal_endpoint or cfg.modal.endpoint
         tk = auth_token or cfg.modal.auth_token
 
-        self.dataset = Blender3DDataset(jsonl_path=dp)
+        self.dataset = Blender3DDataset(jsonl_path=dp, storage_cfg=cfg.storage)
         self.harness = Blender3DHarness(
             modal_endpoint=ep,
             auth_token=tk,

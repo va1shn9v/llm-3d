@@ -192,14 +192,29 @@ class EvalRunner:
             }
 
         if test_sets is None:
-            test_sets = {
-                "id": self.cfg.sft.val_path,
-            }
+            dataset_dir = Path(self.cfg.sft.train_path).parent
+            eval_id_path = dataset_dir / "eval_id.jsonl"
+            eval_ood_path = dataset_dir / "eval_ood.jsonl"
+
+            test_sets = {}
+            if eval_id_path.exists():
+                test_sets["id"] = str(eval_id_path)
+            elif Path(self.cfg.sft.val_path).exists():
+                test_sets["id"] = self.cfg.sft.val_path
+
+            if eval_ood_path.exists():
+                test_sets["ood"] = str(eval_ood_path)
+
+            if not test_sets:
+                raise FileNotFoundError(
+                    "No evaluation dataset found. Expected eval_id.jsonl/eval_ood.jsonl "
+                    f"in {dataset_dir} or fallback val set at {self.cfg.sft.val_path}."
+                )
 
         all_agg: list[AggregatedMetrics] = []
 
         for ts_name, ts_path in test_sets.items():
-            dataset = Blender3DDataset(ts_path)
+            dataset = Blender3DDataset(ts_path, storage_cfg=self.cfg.storage)
 
             for cond_name, gen_fn in conditions.items():
                 log.info(f"Evaluating {cond_name} on {ts_name}...")
