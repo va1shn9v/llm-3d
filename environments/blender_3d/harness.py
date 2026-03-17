@@ -10,6 +10,8 @@ from typing import Any
 
 import httpx
 
+from config import RewardConfig
+
 log = logging.getLogger(__name__)
 
 
@@ -26,11 +28,13 @@ class Blender3DHarness:
         auth_token: str = "",
         timeout: float = 120.0,
         max_retries: int = 1,
+        reward_cfg: RewardConfig | None = None,
     ):
         self.endpoint = modal_endpoint.rstrip("/")
         self.token = auth_token
         self.timeout = timeout
         self.max_retries = max_retries
+        self.reward_cfg = reward_cfg
 
     async def execute_batch(self, items: list[dict[str, Any]]) -> list[dict[str, Any]]:
         """Send batch of code samples to Modal for execution + reward.
@@ -39,6 +43,8 @@ class Blender3DHarness:
         Output: [{"reward", "success", "metrics", ...}]
         """
         payload = {"items": items}
+        if self.reward_cfg is not None:
+            payload["reward_config"] = self.reward_cfg.model_dump(mode="json")
         params = {"token": self.token} if self.token else {}
 
         for attempt in range(1 + self.max_retries):
@@ -63,4 +69,3 @@ class Blender3DHarness:
                          "success": False, "metrics": None, "error": str(e)}
                         for item in items
                     ]
-

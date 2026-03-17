@@ -14,13 +14,13 @@ rl:
 
 reward:
   format_reward_weight: 0.1
-  gate_exec_fail: 0.05
-  gate_no_geometry: 0.10
-  gate_degenerate: 0.15
-  gate_no_resemblance: 0.20
-  quality_floor: 0.30
-  quality_ceil: 1.0
-  f_score_target: 0.6
+  geometric_weight: 0.7
+  text_alignment_weight: 0.2
+  geometry:
+    resemblance:
+      threshold: 0.05
+  text_alignment:
+    threshold: 0.25
 
 # modal.endpoint and modal.auth_token are loaded from dev.env via
 # LLM3D_MODAL__ENDPOINT and LLM3D_MODAL__AUTH_TOKEN environment variables.

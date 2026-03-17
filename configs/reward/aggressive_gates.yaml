@@ -1,14 +1,17 @@
-# Stricter gate penalties to heavily penalize early failures.
-gate_empty: 0.0
-gate_no_import: 0.0
-gate_exec_fail: 0.0
-gate_no_geometry: 0.0
-gate_degenerate: 0.05
-gate_metrics_fail: 0.05
-gate_no_resemblance: 0.10
-quality_floor: 0.30
-quality_ceil: 1.0
-f_score_target: 0.6
+# Stricter binary geometry checks.
 geometric_weight: 0.7
 text_alignment_weight: 0.2
 format_reward_weight: 0.1
+geometry:
+  exec_success:
+    weight: 2.0
+  min_faces:
+    threshold: 12
+    weight: 2.0
+  metrics_available:
+    weight: 2.0
+  resemblance:
+    threshold: 0.10
+    weight: 3.0
+text_alignment:
+  threshold: 0.30

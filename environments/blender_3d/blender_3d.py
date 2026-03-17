@@ -52,6 +52,7 @@ class Blender3DEnvironment:
         self.harness = Blender3DHarness(
             modal_endpoint=ep,
             auth_token=tk,
+            reward_cfg=cfg.reward,
         )
         self.cfg = cfg
 

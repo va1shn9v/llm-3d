@@ -7,7 +7,7 @@ data curation, synthetic generation, Modal infrastructure, training, and evaluat
 CLI entry points use Hydra for config groups, overrides, and multirun sweeps::
 
     python -m training.rl_trainer reward=geometry_heavy rl.learning_rate=1e-5
-    python -m training.rl_trainer --multirun reward.f_score_target=0.4,0.6,0.8
+    python -m training.rl_trainer --multirun reward.geometry.resemblance.threshold=0.04,0.05,0.06
 
 For programmatic use::
 
@@ -184,20 +184,51 @@ class MetricsConfig(BaseModel):
     clip_num_views: int = 4
 
 
+class BinaryRewardConfig(BaseModel):
+    enabled: bool = True
+    weight: float = 1.0
+
+
+class NumericBinaryRewardConfig(BinaryRewardConfig):
+    threshold: float
+
+
+class GeometryRewardConfig(BaseModel):
+    non_empty: BinaryRewardConfig = Field(default_factory=BinaryRewardConfig)
+    import_bpy: BinaryRewardConfig = Field(default_factory=BinaryRewardConfig)
+    exec_success: BinaryRewardConfig = Field(default_factory=BinaryRewardConfig)
+    min_faces: NumericBinaryRewardConfig = Field(
+        default_factory=lambda: NumericBinaryRewardConfig(threshold=4)
+    )
+    max_vertices: NumericBinaryRewardConfig = Field(
+        default_factory=lambda: NumericBinaryRewardConfig(threshold=100_000)
+    )
+    metrics_available: BinaryRewardConfig = Field(default_factory=BinaryRewardConfig)
+    resemblance: NumericBinaryRewardConfig = Field(
+        default_factory=lambda: NumericBinaryRewardConfig(threshold=0.05)
+    )
+
+
+class TextAlignmentRewardConfig(NumericBinaryRewardConfig):
+    requires_resemblance: bool = True
+
+
+class FormatRewardConfig(BaseModel):
+    import_first: BinaryRewardConfig = Field(default_factory=BinaryRewardConfig)
+    has_comments: BinaryRewardConfig = Field(default_factory=BinaryRewardConfig)
+    clears_scene: BinaryRewardConfig = Field(default_factory=BinaryRewardConfig)
+    has_export: BinaryRewardConfig = Field(default_factory=BinaryRewardConfig)
+
+
 class RewardConfig(BaseModel):
-    gate_empty: float = 0.0
-    gate_no_import: float = 0.0
-    gate_exec_fail: float = 0.05
-    gate_no_geometry: float = 0.10
-    gate_degenerate: float = 0.15
-    gate_metrics_fail: float = 0.15
-    gate_no_resemblance: float = 0.20
-    quality_floor: float = 0.30
-    quality_ceil: float = 1.0
-    f_score_target: float = 0.6
     geometric_weight: float = 0.7
     text_alignment_weight: float = 0.2
     format_reward_weight: float = 0.1
+    geometry: GeometryRewardConfig = Field(default_factory=GeometryRewardConfig)
+    text_alignment: TextAlignmentRewardConfig = Field(
+        default_factory=lambda: TextAlignmentRewardConfig(threshold=0.25)
+    )
+    format: FormatRewardConfig = Field(default_factory=FormatRewardConfig)
 
 
 class TinkerConfig(BaseModel):

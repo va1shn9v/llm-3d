@@ -5,7 +5,7 @@
 #   ./scripts/run_rl.sh reward=geometry_heavy rl.learning_rate=1e-5
 #
 # Run a sweep over reward settings:
-#   ./scripts/run_rl.sh --multirun reward.f_score_target=0.4,0.6,0.8
+#   ./scripts/run_rl.sh --multirun reward.geometry.resemblance.threshold=0.04,0.05,0.06
 #
 # Use an experiment preset:
 #   ./scripts/run_rl.sh +experiment=reward_sweep --multirun

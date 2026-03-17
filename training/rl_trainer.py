@@ -137,6 +137,7 @@ class GRPOTrainer:
         self.harness = Blender3DHarness(
             modal_endpoint=self.cfg.modal.endpoint,
             auth_token=self.cfg.modal.auth_token,
+            reward_cfg=self.cfg.reward,
         )
         self.wb = WandbLogger(
             self.cfg.logging,
@@ -344,9 +345,8 @@ if __name__ == "__main__":
     import hydra
     from omegaconf import DictConfig, OmegaConf
 
-    from configs.structured import register_configs
-
     from config import _load_env_file
+    from configs.structured import register_configs
 
     register_configs()
     _load_env_file()

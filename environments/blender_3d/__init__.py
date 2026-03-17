@@ -5,7 +5,7 @@ verifiable environment for RLVR training via prime-rl-env (verifiers).
 Components:
   - Blender3DDataset:     Provides text prompts for code generation
   - Blender3DHarness:     Executes code in Modal Blender sandbox
-  - Blender3DRubric:      Computes gated reward from execution results
+  - Blender3DRubric:      Computes configurable binary reward from execution results
   - Blender3DEnvironment: Combines Dataset + Harness with server-side rewards
 """
 

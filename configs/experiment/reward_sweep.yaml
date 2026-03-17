@@ -1,6 +1,6 @@
 # @package _global_
 
-# Sweep reward weights and f_score targets to find best reward shape.
+# Sweep reward weights and binary thresholds to find best reward shape.
 # Usage: python -m training.rl_trainer +experiment=reward_sweep --multirun
 
 defaults:
@@ -9,6 +9,6 @@ defaults:
 hydra:
   sweeper:
     params:
-      reward.f_score_target: "0.4,0.6,0.8"
+      reward.geometry.resemblance.threshold: "0.04,0.05,0.06"
       reward.geometric_weight: "0.5,0.7,0.9"
       reward.text_alignment_weight: "0.1,0.2,0.3"

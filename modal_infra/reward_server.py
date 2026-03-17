@@ -22,6 +22,9 @@ from typing import Any
 import modal
 from modal import asgi_app
 
+from config import RewardConfig
+from environments.blender_3d.rubric import Blender3DRubric
+
 app = modal.App("llm3d-reward-api")
 
 _BV = os.environ.get("BLENDER_VERSION", "4.2.0")
@@ -40,7 +43,14 @@ blender_image = (
         "ln -s /opt/blender/blender /usr/local/bin/blender",
         "rm /tmp/blender.tar.xz",
     )
-    .pip_install("trimesh>=4.0", "numpy>=1.24", "scipy>=1.11")
+    .pip_install(
+        "trimesh>=4.0",
+        "numpy>=1.24",
+        "scipy>=1.11",
+        "pydantic>=2.5",
+        "pydantic-settings>=2.1",
+        "pyyaml>=6.0",
+    )
 )
 
 execute_blender_code = modal.Function.from_name("llm3d-blender-worker", "execute_blender_code")
@@ -109,51 +119,10 @@ def _pair_artifact_status(uid: str) -> dict[str, Any]:
     }
 
 
-def _compute_reward(
-    code: str,
-    exec_result: dict,
-    metrics_result: dict | None,
-) -> float:
-    """Gated sparse + dense reward (Section 6 of spec)."""
-    if not code or not code.strip():
-        return 0.0
-
-    if "import bpy" not in code:
-        return 0.0
-
-    if not exec_result.get("success", False):
-        return 0.05
-
-    stats = exec_result.get("mesh_stats")
-    if not stats or stats.get("faces", 0) < 4:
-        return 0.10
-
-    if stats.get("vertices", 0) > 100_000:
-        return 0.15
-
-    if metrics_result is None or metrics_result.get("error"):
-        return 0.15
-
-    f_score = metrics_result.get("f_score_005", 0.0)
-    if f_score < 0.05:
-        return 0.20
-
-    quality = 0.3 + 0.7 * min(1.0, f_score / 0.6)
-    return quality
-
-
-def _format_reward(code: str) -> float:
-    """Bonus for following expected code structure."""
-    score = 0.0
-    if "import bpy" in code:
-        score += 0.25
-    if "bpy.ops.object.select_all" in code or "bpy.data.objects" in code:
-        score += 0.25
-    if "EXPORT_PATH" in code:
-        score += 0.25
-    if "bpy.ops.wm.obj_export" in code or "bpy.ops.export_scene" in code:
-        score += 0.25
-    return score
+def _build_rubric(cfg_data: dict[str, Any] | None) -> Blender3DRubric:
+    """Build a shared rubric from serialized config payload."""
+    cfg = RewardConfig(**cfg_data) if cfg_data else RewardConfig()
+    return Blender3DRubric(cfg)
 
 
 @app.function(
@@ -174,15 +143,19 @@ def reward_api():
     class RewardItem(BaseModel):
         object_id: str
         code: str
+        text_description: str = ""
         seed: int = 42
 
     class BatchRequest(BaseModel):
         items: list[RewardItem]
+        reward_config: dict[str, Any] | None = None
 
     class SingleRequest(BaseModel):
         object_id: str
         code: str
+        text_description: str = ""
         seed: int = 42
+        reward_config: dict[str, Any] | None = None
 
     class RenderRequest(BaseModel):
         object_id: str
@@ -241,6 +214,7 @@ def reward_api():
     @api.post("/reward/batch")
     async def reward_batch(req: BatchRequest, token: str = Query(None)):
         _verify_token(token)
+        rubric = _build_rubric(req.reward_config)
 
         exec_futures = [
             execute_blender_code.spawn(item.code, item.seed)
@@ -271,14 +245,18 @@ def reward_api():
 
         rewards = []
         for item, er, mr in zip(req.items, exec_results, metrics_results):
-            base = _compute_reward(item.code, er, mr)
-            fmt = _format_reward(item.code)
-            total = 0.9 * base + 0.1 * fmt
+            evaluation = rubric.evaluate(
+                item.code,
+                {**er, "metrics": mr},
+                text_description=item.text_description,
+            )
             rewards.append({
                 "object_id": item.object_id,
-                "reward": total,
-                "base_reward": base,
-                "format_reward": fmt,
+                "reward": evaluation["reward"],
+                "base_reward": evaluation["base_reward"],
+                "text_alignment_reward": evaluation["text_alignment_reward"],
+                "format_reward": evaluation["format_reward"],
+                "sub_rewards": evaluation["sub_rewards"],
                 "success": er["success"],
                 "metrics": mr,
                 "elapsed": er.get("elapsed", 0),
@@ -295,6 +273,7 @@ def reward_api():
     @api.post("/reward/single")
     async def reward_single(req: SingleRequest, token: str = Query(None)):
         _verify_token(token)
+        rubric = _build_rubric(req.reward_config)
         er = execute_blender_code.remote(req.code, req.seed)
         mr = None
         if er["success"] and er.get("mesh_bytes"):
@@ -302,12 +281,17 @@ def reward_api():
             if gt:
                 gt_bytes, gt_format = gt
                 mr = compute_metrics.remote(er["mesh_bytes"], gt_bytes, 10_000, "obj", gt_format)
-        base = _compute_reward(req.code, er, mr)
-        fmt = _format_reward(req.code)
+        evaluation = rubric.evaluate(
+            req.code,
+            {**er, "metrics": mr},
+            text_description=req.text_description,
+        )
         return {
-            "reward": 0.9 * base + 0.1 * fmt,
-            "base_reward": base,
-            "format_reward": fmt,
+            "reward": evaluation["reward"],
+            "base_reward": evaluation["base_reward"],
+            "text_alignment_reward": evaluation["text_alignment_reward"],
+            "format_reward": evaluation["format_reward"],
+            "sub_rewards": evaluation["sub_rewards"],
             "success": er["success"],
             "metrics": mr,
             "exec_result": {k: v for k, v in er.items() if k != "mesh_bytes"},
