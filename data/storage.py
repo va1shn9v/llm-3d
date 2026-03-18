@@ -10,8 +10,10 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import os
 import shutil
 import tempfile
+from functools import lru_cache
 from pathlib import Path
 from typing import IO, Any
 
@@ -25,9 +27,67 @@ def _cache_key(uri: str) -> str:
     return hashlib.sha256(uri.encode()).hexdigest()[:24]
 
 
+def _hf_token() -> str:
+    return os.environ.get("HF_TOKEN") or os.environ.get("HUGGINGFACE_HUB_TOKEN") or ""
+
+
+@lru_cache(maxsize=32)
+def _resolve_hf_bucket_namespace(explicit_namespace: str, token: str) -> str:
+    """Resolve the effective HF bucket namespace."""
+    if explicit_namespace:
+        return explicit_namespace
+
+    if not token:
+        raise ValueError(
+            "HF bucket namespace is required when HF_TOKEN/HUGGINGFACE_HUB_TOKEN is not set. "
+            "Set LLM3D_STORAGE__HF_BUCKET_NAMESPACE or provide an HF token."
+        )
+
+    from huggingface_hub import HfApi
+
+    info = HfApi(token=token).whoami()
+    namespace = info.get("name") or info.get("fullname")
+    if not namespace:
+        raise ValueError("Could not resolve Hugging Face namespace from the active token.")
+    return str(namespace)
+
+
+def _hf_bucket_id(cfg: StorageConfig) -> str:
+    namespace = _resolve_hf_bucket_namespace(cfg.hf_bucket_namespace.strip(), _hf_token())
+    return f"{namespace}/{cfg.hf_bucket}"
+
+
 def _hf_bucket_url(cfg: StorageConfig) -> str:
-    ns = cfg.hf_bucket_namespace
-    return f"hf://buckets/{ns}/{cfg.hf_bucket}" if ns else f"hf://buckets/{cfg.hf_bucket}"
+    return f"hf://buckets/{_hf_bucket_id(cfg)}"
+
+
+def ensure_bucket_exists(cfg: StorageConfig) -> str:
+    """Create the configured HF bucket when the SDK supports it."""
+    bucket_id = _hf_bucket_id(cfg)
+    token = _hf_token()
+
+    try:
+        from huggingface_hub import create_bucket
+    except ImportError:
+        create_bucket = None
+
+    if create_bucket is not None:
+        create_bucket(bucket_id, exist_ok=True, token=token)
+        return f"hf://buckets/{bucket_id}"
+
+    from huggingface_hub import HfApi
+
+    api = HfApi(token=token)
+    create_method = getattr(api, "create_bucket", None)
+    if create_method is not None:
+        create_method(bucket_id, exist_ok=True)
+    else:
+        log.info(
+            "huggingface_hub does not expose bucket creation in this environment; "
+            "assuming bucket %s already exists",
+            bucket_id,
+        )
+    return f"hf://buckets/{bucket_id}"
 
 
 def bucket_uri(remote_key: str, cfg: StorageConfig) -> str:
@@ -85,6 +145,7 @@ def upload(local_path: str | Path, remote_key: str, cfg: StorageConfig) -> None:
     """Upload a single file to the HF Bucket."""
     from huggingface_hub import HfFileSystem
 
+    ensure_bucket_exists(cfg)
     hffs = HfFileSystem()
     dest = f"{_hf_bucket_url(cfg)}/{remote_key}"
     log.info("Uploading %s -> %s", local_path, dest)

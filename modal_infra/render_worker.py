@@ -10,6 +10,28 @@ import tempfile
 import modal
 
 app = modal.App("llm3d-render-worker")
+_PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
+def _load_dev_env() -> None:
+    """Load repo-local dev.env for Modal deploy-time configuration."""
+    env_path = os.path.join(_PROJECT_ROOT, "dev.env")
+    if not os.path.exists(env_path):
+        return
+
+    with open(env_path, encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            key, _, value = line.partition("=")
+            key = key.strip()
+            value = value.strip().strip("'\"")
+            if key:
+                os.environ.setdefault(key, value)
+
+
+_load_dev_env()
 
 _BV = os.environ.get("BLENDER_VERSION", "4.2.0")
 blender_gpu_image = (
@@ -29,7 +51,10 @@ blender_gpu_image = (
     )
     .pip_install("trimesh>=4.0", "numpy>=1.24", "scipy>=1.11")
 )
-volume = modal.Volume.from_name("llm3d-data", create_if_missing=True)
+volume = modal.Volume.from_name(
+    os.environ.get("LLM3D_MODAL__VOLUME_NAME", "llm3d-data"),
+    create_if_missing=True,
+)
 
 _RENDER_SCRIPT = """\
 import bpy, sys, os, json, math

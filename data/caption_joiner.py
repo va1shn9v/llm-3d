@@ -15,7 +15,7 @@ import pandas as pd
 from huggingface_hub import hf_hub_download
 
 from config import ProjectConfig, load_config
-from data.storage import bucket_uri, resolve_manifest_path, write_text
+from data.storage import bucket_uri, ensure_bucket_exists, resolve_manifest_path, write_text
 
 log = logging.getLogger(__name__)
 
@@ -73,6 +73,7 @@ def build_manifest(
 
     import modal
 
+    ensure_bucket_exists(cfg.storage)
     bucket_root = bucket_uri("", cfg.storage)
     build_remote_manifest = modal.Function.from_name(
         "llm3d-data-worker",

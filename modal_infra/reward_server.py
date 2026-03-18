@@ -26,6 +26,42 @@ from config import RewardConfig
 from environments.blender_3d.rubric import Blender3DRubric
 
 app = modal.App("llm3d-reward-api")
+_PROJECT_ROOT = Path(__file__).resolve().parents[1]
+
+
+def _load_dev_env() -> None:
+    """Load repo-local dev.env for Modal deploy-time configuration."""
+    env_path = _PROJECT_ROOT / "dev.env"
+    if not env_path.exists():
+        return
+
+    for line in env_path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        key, _, value = line.partition("=")
+        key = key.strip()
+        value = value.strip().strip("'\"")
+        if key:
+            os.environ.setdefault(key, value)
+
+
+def _runtime_secrets() -> list[modal.Secret]:
+    secret_env = {
+        key: value
+        for key in (
+            "REWARD_API_TOKEN",
+            "GT_MESH_VOLUME_SUBDIR",
+            "LLM3D_STORAGE__MODAL_VOLUME_MESH_SUBDIR",
+        )
+        if (value := os.environ.get(key))
+    }
+    if not secret_env:
+        return []
+    return [modal.Secret.from_dict(secret_env)]
+
+
+_load_dev_env()
 
 _BV = os.environ.get("BLENDER_VERSION", "4.2.0")
 blender_image = (
@@ -51,15 +87,23 @@ blender_image = (
         "pydantic-settings>=2.1",
         "pyyaml>=6.0",
     )
+    .add_local_python_source("config", "environments")
 )
 
 execute_blender_code = modal.Function.from_name("llm3d-blender-worker", "execute_blender_code")
 compute_metrics = modal.Function.from_name("llm3d-metrics-worker", "compute_metrics")
 render_mesh_views = modal.Function.from_name("llm3d-render-worker", "render_mesh_views")
-volume = modal.Volume.from_name("llm3d-data", create_if_missing=True)
+volume = modal.Volume.from_name(
+    os.environ.get("LLM3D_MODAL__VOLUME_NAME", "llm3d-data"),
+    create_if_missing=True,
+)
 
 _START_TIME = time.time()
-_GT_MESH_VOLUME_SUBDIR = os.environ.get("GT_MESH_VOLUME_SUBDIR", "meshes").strip("/") or "meshes"
+_GT_MESH_VOLUME_SUBDIR = (
+    os.environ.get("GT_MESH_VOLUME_SUBDIR")
+    or os.environ.get("LLM3D_STORAGE__MODAL_VOLUME_MESH_SUBDIR")
+    or "meshes"
+).strip("/") or "meshes"
 
 
 def _verify_token(token: str | None):
@@ -129,6 +173,7 @@ def _build_rubric(cfg_data: dict[str, Any] | None) -> Blender3DRubric:
     image=blender_image,
     cpu=4, memory=8192, timeout=600,
     volumes={"/data": volume},
+    secrets=_runtime_secrets(),
     keep_warm=1,
     allow_concurrent_inputs=50,
 )

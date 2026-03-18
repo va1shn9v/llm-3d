@@ -18,6 +18,27 @@ from typing import Any
 import modal
 
 app = modal.App("llm3d-blender-worker")
+_PROJECT_ROOT = Path(__file__).resolve().parents[1]
+
+
+def _load_dev_env() -> None:
+    """Load repo-local dev.env for Modal deploy-time configuration."""
+    env_path = _PROJECT_ROOT / "dev.env"
+    if not env_path.exists():
+        return
+
+    for line in env_path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        key, _, value = line.partition("=")
+        key = key.strip()
+        value = value.strip().strip("'\"")
+        if key:
+            os.environ.setdefault(key, value)
+
+
+_load_dev_env()
 
 _BV = os.environ.get("BLENDER_VERSION", "4.2.0")
 blender_image = (
@@ -37,7 +58,10 @@ blender_image = (
     )
     .pip_install("trimesh>=4.0", "numpy>=1.24", "scipy>=1.11")
 )
-volume = modal.Volume.from_name("llm3d-data", create_if_missing=True)
+volume = modal.Volume.from_name(
+    os.environ.get("LLM3D_MODAL__VOLUME_NAME", "llm3d-data"),
+    create_if_missing=True,
+)
 
 _EXPORT_PATH_PLACEHOLDER = "___EXPORT_PATH___"
 _USER_CODE_PLACEHOLDER = "___USER_CODE___"

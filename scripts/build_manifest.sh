@@ -6,6 +6,11 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 cd "$PROJECT_ROOT"
 
+# Load repo-local env vars so Modal deploy sees secrets without manual export.
+# shellcheck disable=SC1091
+. "$SCRIPT_DIR/load_dev_env.sh"
+load_project_env "$PROJECT_ROOT"
+
 CONFIG="${1:-configs/default.yaml}"
 
 echo "=== Building manifest (remote mesh ingest -> HF bucket) ==="

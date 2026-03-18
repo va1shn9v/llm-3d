@@ -18,6 +18,27 @@ import modal
 from data.caption_joiner import load_cap3d_captions, load_objaverse_object_paths
 
 app = modal.App("llm3d-data-worker")
+_PROJECT_ROOT = Path(__file__).resolve().parents[1]
+
+
+def _load_dev_env() -> None:
+    """Load repo-local dev.env for Modal deploy-time configuration."""
+    env_path = _PROJECT_ROOT / "dev.env"
+    if not env_path.exists():
+        return
+
+    for line in env_path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        key, _, value = line.partition("=")
+        key = key.strip()
+        value = value.strip().strip("'\"")
+        if key:
+            os.environ.setdefault(key, value)
+
+
+_load_dev_env()
 
 
 def _hf_secrets() -> list[modal.Secret]:
@@ -32,9 +53,16 @@ def _hf_secrets() -> list[modal.Secret]:
     ]
 
 
-data_image = modal.Image.debian_slim(python_version="3.11").pip_install(
-    "huggingface_hub>=1.0",
-    "pandas>=2.0",
+data_image = (
+    modal.Image.debian_slim(python_version="3.11")
+    .pip_install(
+        "huggingface_hub>=1.0",
+        "pandas>=2.0",
+        "pydantic>=2.5",
+        "pydantic-settings>=2.1",
+        "pyyaml>=6.0",
+    )
+    .add_local_python_source("config", "data")
 )
 
 
