@@ -1,37 +1,6 @@
-defaults:
-  - reward: default
-  - rl: default
-  - sft: default
-  - _self_
-
 project_name: "llm-3d"
 seed: 42
 output_dir: "./output"
-data_dir: "./data"
-blender_path: "blender"
-
-views:
-  num_views: 4
-  resolution: [512, 512]
-  engine: "BLENDER_EEVEE_NEXT"
-  elevation_deg: 25.0
-  film_transparent: true
-  sun_energy: 3.0
-  camera_distance_factor: 2.5
-  cycles_samples: 128
-
-quality_gate:
-  min_faces: 4
-  max_vertices: 100000
-  cd_threshold: 0.05
-  min_f_score_005: 0.05
-
-objaverse_filter:
-  min_face_count: 100
-  max_vertex_count: 500000
-  exclude_animated: true
-  max_uids: null
-  output_path: "datasets/filtered_uids.json"
 
 storage:
   backend: "hf"
@@ -43,92 +12,117 @@ storage:
   mesh_prefix: "meshes"
   modal_volume_mesh_subdir: "meshes"
 
-synthetic_gen:
-  teacher_model: "gpt-4o-mini"
-  teacher_provider: "openai"
-  temperature: 0.7
-  max_attempts_per_caption: 3
-  cd_threshold: 0.05
-  f_score_threshold: 0.1
-  min_faces: 4
-  max_vertices: 100000
-  batch_size: 50
-  max_concurrent_blender: 32
-  output_path: "datasets/synthetic_sft.jsonl"
-  hard_prompts_path: "datasets/hard_prompts.csv"
-  checkpoint_path: "datasets/synthetic_checkpoint.json"
-
-hard_mining:
-  enabled: true
-  hard_prompts_csv: "datasets/hard_prompts.csv"
-  hard_prompt_ratio: 0.4
-  min_failure_rate: 0.5
-  min_attempts: 2
-
 dataset:
-  sft_train_ratio: 0.90
-  sft_val_ratio: 0.05
-  eval_id_ratio: 0.03
-  eval_ood_ratio: 0.02
-  curriculum: true
-  difficulty_weights:
-    code_length_tokens: 0.4
-    vertex_count: 0.3
-    face_count: 0.3
   system_prompt: >
-    You are an expert Blender Python developer. Given a text description of a
-    3D object, write a complete bpy script that creates the described geometry.
-    Use standard bpy operations (primitives, BMesh, modifiers, booleans, curves).
-    The script must: 1. Start with `import bpy` and clear the default scene.
-    2. Create the geometry described. 3. Export the result to OBJ at the path
-    from os.environ['EXPORT_PATH']. Output only the Python code, no explanations.
+    You are an expert Blender Python developer targeting Blender 4.2.
+    Given a text description of a 3D object, write a complete bpy script that
+    creates the described geometry, applies sensible materials, and exports the
+    result to OBJ.
 
 modal:
-  blender_version: "4.2.0"
-  blender_cpu: 2
-  blender_memory_mb: 4096
-  blender_timeout_s: 150
-  exec_timeout_s: 120
-  metrics_cpu: 2
-  metrics_memory_mb: 2048
-  metrics_timeout_s: 60
-  render_cpu: 2
-  render_memory_mb: 4096
-  render_timeout_s: 300
-  reward_cpu: 4
-  reward_memory_mb: 8192
-  reward_timeout_s: 600
-  reward_concurrency: 50
-  reward_keep_warm: 1
-  max_parallel_workers: 64
-  endpoint: ${oc.env:LLM3D_MODAL__ENDPOINT,}
-  auth_token: ${oc.env:LLM3D_MODAL__AUTH_TOKEN,}
+  endpoint: ""
+  auth_token: ""
   volume_name: "llm3d-data"
 
-metrics:
-  num_sample_points_fast: 10000
-  num_sample_points_eval: 100000
-  f_score_thresholds: [0.01, 0.05]
-  hausdorff_percentile: 90.0
-  clip_model: "openai/clip-vit-large-patch14"
-  clip_num_views: 4
+reward:
+  geometric_weight: 0.9
+  format_reward_weight: 0.1
+  geometry:
+    non_empty:
+      enabled: true
+      weight: 1.0
+    import_bpy:
+      enabled: true
+      weight: 1.0
+    exec_success:
+      enabled: true
+      weight: 1.0
+    min_faces:
+      enabled: true
+      weight: 1.0
+      threshold: 4
+    max_vertices:
+      enabled: true
+      weight: 1.0
+      threshold: 100000
+    metrics_available:
+      enabled: true
+      weight: 1.0
+    resemblance:
+      enabled: true
+      weight: 1.0
+      threshold: 0.05
+  format:
+    import_first:
+      enabled: true
+      weight: 1.0
+    has_comments:
+      enabled: true
+      weight: 1.0
+    clears_scene:
+      enabled: true
+      weight: 1.0
+    has_export:
+      enabled: true
+      weight: 1.0
 
-tinker:
+rl:
   base_model: "Qwen/Qwen2.5-Coder-7B-Instruct"
+  lora_rank: 32
+  train_mlp: true
+  train_attn: true
+  train_unembed: true
+  init_state_path: ""
+  steps: 1000
+  batch_size: 16
+  num_completions: 8
+  learning_rate: 5.0e-6
+  temperature: 0.7
+  max_new_tokens: 4096
+  stop: ["<|im_end|>"]
+  checkpoint_every: 100
+  log_every: 10
+  prompt_path: "datasets/rl_prompts.jsonl"
 
 eval:
-  id_test_size: 1500
-  ood_objaverse: 500
-  ood_gso: 300
-  ood_unseen_categories: 200
-  unseen_categories:
-    - fork
-    - spoon
-    - tv
-    - window
-    - door
+  id_path: "datasets/eval_id.jsonl"
+  ood_path: ""
   temperature: 0.0
   bootstrap_samples: 10000
+  batch_size: 16
+  max_concurrent_tinker: 8
+  save_details: true
+  max_cases_per_test_set: null
+  selection:
+    output_path: "datasets/eval_id.jsonl"
+    manifest_path: ""
+    target_size: 500
+    max_per_category: 2
+  conditions:
+    baseline:
+      enabled: true
+      base_model: ""
+      model_path: ""
+      temperature: 0.0
+      max_new_tokens: 4096
+      num_samples: 1
+      stop: ["<|im_end|>"]
+    candidate:
+      enabled: false
+      base_model: ""
+      model_path: ""
+      temperature: 0.0
+      max_new_tokens: 4096
+      num_samples: 1
+      stop: ["<|im_end|>"]
+    reference:
+      enabled: false
+      base_model: ""
+      model_path: ""
+      temperature: 0.0
+      max_new_tokens: 4096
+      num_samples: 1
+      stop: ["<|im_end|>"]
 
 logging:
   level: "INFO"

@@ -10,10 +10,14 @@ cd "$PROJECT_ROOT"
 . "$SCRIPT_DIR/load_dev_env.sh"
 load_project_env "$PROJECT_ROOT"
 
-CONFIG="${1:-configs/default.yaml}"
+CONFIG="${1:-configs/config.yaml}"
 
 echo "=== Preloading meshes into Modal volume ==="
 echo "Config: $CONFIG"
+echo ""
+
+echo "Deploying Blender worker..."
+modal deploy modal_infra/blender_worker.py
 echo ""
 
 python -c "

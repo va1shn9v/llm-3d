@@ -1,50 +1,33 @@
 # llm-3d
 
-Train a code model to generate executable Blender 4.2 Python from text descriptions, then improve it with RL using server-side execution and mesh-based rewards on Modal.
+Direct RL and evaluation for Blender Python code generation.
 
-## Architecture
+This repo is intentionally scoped to two workflows:
 
-```text
-Objaverse filter
-  -> caption join + remote mesh ingest to HF bucket
-  -> manifest.jsonl with hf:// mesh references
-  -> preload GT meshes into Modal volume
-  -> synthetic teacher generation + Blender validation
-  -> SFT / RL / eval dataset splits
-  -> SFT on Tinker
-  -> RL (GRPO) on Tinker
-  -> reward execution via Modal /reward/batch
-  -> eval via the same reward harness
-```
+1. Build a curated evaluation set from an existing manifest of objects already stored in your HF bucket.
+2. Run direct RL on an instruct model, then evaluate generated Blender code through the same Modal reward path.
 
-Current runtime split:
+## What Remains
 
-- Local scripts orchestrate jobs, config loading, and dataset preparation.
-- Tinker handles SFT and RL optimization.
-- Modal executes Blender code, computes mesh metrics, serves the reward API, and stores GT meshes in a shared volume.
-- Hugging Face bucket storage is the durable mesh/manifest backend.
+- `training/rl/`: RL sampler + direct GRPO trainer
+- `training/eval/`: Tinker sampling + Modal-backed evaluation
+- `training/common/`: shared Tinker and experiment-tracking helpers
+- `data/eval_dataset.py`: builds a diverse eval set from an existing manifest
+- `environments/blender_3d/`: prompt dataset, reward harness, and rubric
+- `modal_infra/`: Blender execution worker, metrics worker, and reward API
+- `scripts/build_eval_dataset.sh`: curate the eval set
+- `scripts/preload_modal_meshes.sh`: sync GT meshes from the HF bucket into the Modal volume
+- `scripts/deploy_reward_api.sh`: deploy the reward API
+- `scripts/run_rl.sh`: direct RL
+- `scripts/run_eval.sh`: evaluation
 
-The current training stack is built around `Qwen/Qwen2.5-Coder-7B-Instruct`, Hydra config groups layered over the typed config schema in `config.py`, and a server-side reward path on Modal backed by Hugging Face bucket storage plus a shared Modal volume for GT meshes.
+Removed from the repo:
 
-## Repo Layout
-
-```text
-config.py                     Typed root config schema + env loading
-configs/config.yaml           Hydra root config for training/eval
-configs/default.yaml          Single-file config used by non-Hydra data scripts
-configs/rl/                   RL presets
-configs/sft/                  SFT presets
-configs/reward/               Reward presets
-configs/experiment/           Hydra sweep presets
-
-data/                         Objaverse filtering, manifest build, synthetic data, dataset splits
-environments/blender_3d/      Dataset, Modal harness, rubric, environment wrapper
-modal_infra/reward_server.py  Modal FastAPI reward API
-training/sft_trainer.py       SFT entrypoint
-training/rl_trainer.py        GRPO RL entrypoint
-training/eval_runner.py       Evaluation entrypoint
-scripts/                      Shell launchers for each phase
-```
+- synthetic teacher generation
+- SFT training
+- Objaverse filtering / manifest ingestion
+- image-conditioned preprocessing and render workers
+- stale SFT/image-era configs
 
 ## Setup
 
@@ -52,16 +35,7 @@ scripts/                      Shell launchers for each phase
 pip install -e ".[all]"
 ```
 
-Useful extras:
-
-- `pip install -e ".[training]"`
-- `pip install -e ".[modal]"`
-- `pip install -e ".[data]"`
-- `pip install -e ".[dev]"`
-
-## Environment
-
-Create `dev.env` from the example and fill in credentials:
+Create `dev.env` from the example:
 
 ```bash
 cp dev.env.example dev.env
@@ -71,7 +45,6 @@ Important variables:
 
 | Variable | Purpose |
 |---|---|
-| `OPENAI_API_KEY` | Teacher model for synthetic generation |
 | `HF_TOKEN` | Hugging Face bucket access |
 | `LLM3D_STORAGE__HF_BUCKET` | Bucket name |
 | `LLM3D_STORAGE__HF_BUCKET_NAMESPACE` | HF namespace / org |
@@ -79,163 +52,90 @@ Important variables:
 | `MODAL_TOKEN_SECRET` | Modal auth |
 | `LLM3D_MODAL__ENDPOINT` | Deployed reward API base URL |
 | `LLM3D_MODAL__AUTH_TOKEN` | Client token sent to the reward API |
-| `REWARD_API_TOKEN` | Server-side token checked by the Modal API |
-| `TINKER_API_KEY` | Tinker training access |
+| `LLM3D_MODAL__VOLUME_NAME` | Modal volume name |
+| `REWARD_API_TOKEN` | Server-side token checked by the reward API |
+| `TINKER_API_KEY` | Tinker access |
 | `WANDB_API_KEY` | Optional experiment logging |
 
-`config.load_config()` auto-loads `dev.env`. Variables prefixed with `LLM3D_` map into nested config fields using `__`, for example `LLM3D_MODAL__ENDPOINT -> modal.endpoint`.
+`config.load_config()` reads `configs/config.yaml` and applies a small explicit env overlay for the Modal/HF fields above.
 
-## Config System
+## Config
 
-There are two config entry modes in the repo today:
+The repo now uses a single default config file: `configs/config.yaml`.
 
-1. Hydra entrypoints for training and eval.
-   Files: `training/sft_trainer.py`, `training/rl_trainer.py`, `training/eval_runner.py`
-   Root config: [`configs/config.yaml`](configs/config.yaml)
-
-2. Direct `load_config()` calls for the data pipeline and helper scripts.
-   Default YAML: [`configs/default.yaml`](configs/default.yaml)
-
-The typed schema lives in [`config.py`](config.py). Hydra config groups are registered from [`configs/structured.py`](configs/structured.py).
-
-### Main Config Sections
-
-- `views`: render settings such as `num_views`, resolution, engine, lighting
-- `objaverse_filter`: UID filtering thresholds and output path
-- `storage`: HF bucket settings, cache, manifest key, Modal volume mesh subdir
-- `synthetic_gen`: teacher model/provider/API, concurrency, thresholds, output paths
-- `hard_mining`: RL hard prompt oversampling settings
-- `dataset`: split ratios, curriculum, system prompt
-- `modal`: CPU / memory / timeout / concurrency settings and API endpoint auth
-- `metrics`: point counts, F-score thresholds, CLIP model settings
-- `reward`: reward weights and per-check thresholds
-- `sft`: LoRA and SFT hyperparameters
-- `rl`: GRPO hyperparameters
-- `eval`: test sizes and bootstrap settings
-- `logging`: logging level and W&B config
-
-### How To Set Configs
-
-For reusable secrets or machine-local settings:
-
-- edit `dev.env`
-- or export env vars such as `LLM3D_MODAL__ENDPOINT=...`
-
-For data jobs that accept a YAML path:
+Override any value directly on the CLI with dotted `key=value` assignments:
 
 ```bash
-./scripts/filter_objaverse.sh configs/default.yaml
-./scripts/generate_synthetic_data.sh configs/dev_5.yaml
+./scripts/run_rl.sh rl.learning_rate=1e-5 rl.steps=200
+./scripts/run_eval.sh eval.max_cases_per_test_set=100
+./scripts/run_eval.sh eval.conditions.candidate.enabled=true eval.conditions.candidate.model_path=ckpts/rl-step-500
 ```
 
-For training and eval jobs, pass Hydra overrides through the shell wrappers:
+The active config surface is:
+
+- `dataset.system_prompt`
+- `storage.*` for the manifest and HF bucket
+- `modal.endpoint`, `modal.auth_token`, `modal.volume_name`
+- `reward.*` for geometry/format scoring
+- `rl.*` for direct RL hyperparameters and prompt dataset path
+- `eval.*` for eval dataset paths, selection settings, and comparison conditions
+- `logging.*`
+
+## Eval Set
+
+The repo assumes you already have a manifest of `{uid, caption, mesh_path}` entries, either locally or in the configured HF bucket.
+
+Build a curated eval set:
 
 ```bash
-./scripts/run_sft.sh sft.learning_rate=5e-5 sft.epochs=5
-./scripts/run_rl.sh rl=fast_iter reward=geometry_heavy
-./scripts/run_eval.sh eval.temperature=0.2 output_dir=./output/eval_debug
+./scripts/build_eval_dataset.sh
 ```
 
-For multirun sweeps:
+By default this writes `datasets/eval_id.jsonl` using:
 
-```bash
-./scripts/run_rl.sh --multirun reward.geometry.resemblance.threshold=0.04,0.05,0.06
-./scripts/run_rl.sh +experiment=reward_sweep --multirun
-```
+- `eval.selection.output_path`
+- `eval.selection.manifest_path` if set, otherwise `storage.manifest_key`
+- `eval.selection.target_size`
+- `eval.selection.max_per_category`
 
-Available preset groups:
+The selector is conservative: it filters obviously noisy captions and round-robins across inferred categories to keep the set diverse.
 
-- RL presets: [`configs/rl/default.yaml`](configs/rl/default.yaml), [`configs/rl/fast_iter.yaml`](configs/rl/fast_iter.yaml), [`configs/rl/long_run.yaml`](configs/rl/long_run.yaml)
-- Reward presets: [`configs/reward/default.yaml`](configs/reward/default.yaml), [`configs/reward/geometry_heavy.yaml`](configs/reward/geometry_heavy.yaml), [`configs/reward/clip_heavy.yaml`](configs/reward/clip_heavy.yaml), [`configs/reward/aggressive_gates.yaml`](configs/reward/aggressive_gates.yaml)
-- Experiment sweeps: [`configs/experiment/reward_sweep.yaml`](configs/experiment/reward_sweep.yaml), [`configs/experiment/gate_ablation.yaml`](configs/experiment/gate_ablation.yaml)
+## Reward Path
 
-## Current Defaults
-
-Selected defaults from the live config:
-
-- SFT base model: `Qwen/Qwen2.5-Coder-7B-Instruct`
-- SFT: `epochs=3`, `batch_size=8`, `grad_accum_steps=4`, `learning_rate=1e-4`
-- RL: `algorithm=grpo`, `steps=1000`, `batch_size=16`, `num_completions=8`, `learning_rate=5e-6`
-- Modal reward API: `reward_cpu=4`, `reward_memory_mb=8192`, `reward_timeout_s=600`, `reward_concurrency=50`
-- Storage backend: `hf`
-- Views: `num_views=4`, `resolution=[512, 512]`
-
-## Reward
-
-The current rubric is defined in [`environments/blender_3d/rubric.py`](environments/blender_3d/rubric.py) and configured by [`configs/reward/default.yaml`](configs/reward/default.yaml).
-
-Reward is:
+Reward is intentionally simple and live:
 
 ```text
 reward =
   geometric_weight * geometry_score +
-  text_alignment_weight * text_alignment_score +
   format_reward_weight * format_score
 ```
 
-Default top-level weights:
+Geometry checks:
 
-- `geometric_weight = 0.7`
-- `text_alignment_weight = 0.2`
-- `format_reward_weight = 0.1`
+- non-empty code
+- `import bpy`
+- execution success
+- minimum face count
+- maximum vertex count
+- metrics available
+- resemblance via `f_score_005`
 
-### Geometry Score
+Format checks:
 
-`geometry_score` is the weighted average of binary checks:
+- import first
+- has comments
+- clears scene
+- has export
 
-- `non_empty`
-- `import_bpy`
-- `exec_success`
-- `min_faces >= 4`
-- `max_vertices <= 100000`
-- `metrics_available`
-- `resemblance`, defined as `f_score_005 >= 0.05`
+There is no dead CLIP/text-alignment path in the active repo.
 
-### Text Alignment Score
+## Modal
 
-Configured as a binary threshold:
-
-- `clip_score >= 0.25`
-- gated by `requires_resemblance=true` by default
-
-Important: the current Modal `/reward/batch` and `/reward/single` flow does not pass a `clip_score` into the rubric, so `text_alignment_reward` is effectively `0` in the live reward API path unless that execution path is extended.
-
-### Format Score
-
-`format_score` is the weighted average of binary checks:
-
-- `import_first`
-- `has_comments`
-- `clears_scene`
-- `has_export`
-
-### Reward Presets
-
-- `reward=default`: balanced geometry / text-alignment / format weights
-- `reward=geometry_heavy`: 0.85 / 0.10 / 0.05
-- `reward=clip_heavy`: 0.50 / 0.40 / 0.10
-- `reward=aggressive_gates`: stricter geometry thresholds and heavier resemblance weighting
-
-## Launching Jobs
-
-### Full Data Pipeline
+Sync meshes into the Modal volume used by reward/eval:
 
 ```bash
-./scripts/filter_objaverse.sh
-./scripts/build_manifest.sh
-./scripts/generate_synthetic_data.sh
-./scripts/build_object_dataset.sh
+./scripts/preload_modal_meshes.sh
 ```
-
-What each stage does:
-
-- [`scripts/filter_objaverse.sh`](scripts/filter_objaverse.sh): filters candidate Objaverse UIDs
-- [`scripts/build_manifest.sh`](scripts/build_manifest.sh): joins captions and remotely ingests meshes into your HF bucket
-- [`scripts/preload_modal_meshes.sh`](scripts/preload_modal_meshes.sh): syncs bucket meshes into the Modal volume used by reward and synthetic validation
-- [`scripts/generate_synthetic_data.sh`](scripts/generate_synthetic_data.sh): teacher generation plus Blender validation, also writes `hard_prompts.csv`
-- [`scripts/build_object_dataset.sh`](scripts/build_object_dataset.sh): produces `sft_train.jsonl`, `sft_val.jsonl`, `rl_prompts.jsonl`, and eval splits
-
-### Modal Reward API
 
 Deploy the reward API:
 
@@ -243,92 +143,40 @@ Deploy the reward API:
 ./scripts/deploy_reward_api.sh
 ```
 
-This deploys [`modal_infra/reward_server.py`](modal_infra/reward_server.py), which exposes:
+Active endpoints:
 
 - `POST /reward/batch`
 - `POST /reward/single`
-- `POST /render`
 - `POST /execute`
 - `GET /health`
+- `GET /artifacts/pair/{uid}`
+- `GET /artifacts/gt/{uid}`
 
-### Training
+## Training
 
-Run SFT:
-
-```bash
-./scripts/run_sft.sh
-```
-
-Run RL:
+Run direct RL on the instruct base model configured in `rl.base_model`:
 
 ```bash
 ./scripts/run_rl.sh
 ```
 
-Run eval:
+The RL path lives under `training/rl/` and expects a real Tinker client plus a real prompt dataset at `rl.prompt_path`. There is no dummy fallback.
+
+## Evaluation
+
+Run evaluation against `eval.id_path` and optional `eval.ood_path`:
 
 ```bash
 ./scripts/run_eval.sh
 ```
 
-The shell wrappers only forward arguments. Equivalent direct entrypoints are:
+Each enabled eval condition can point either at:
 
-```bash
-python -m training.sft_trainer
-python -m training.rl_trainer
-python -m training.eval_runner
-```
+- a raw base model via `base_model`
+- a trained adapter/checkpoint via `model_path`
 
-### Example Launches
+The default intended comparison is:
 
-Quick RL debug run:
-
-```bash
-./scripts/run_rl.sh rl=fast_iter reward=geometry_heavy logging.wandb_enabled=true
-```
-
-Longer RL run:
-
-```bash
-./scripts/run_rl.sh rl=long_run reward=aggressive_gates
-```
-
-Reward sweep:
-
-```bash
-./scripts/run_rl.sh +experiment=reward_sweep --multirun
-```
-
-Small end-to-end smoke test:
-
-```bash
-./scripts/run_dev_pipeline.sh
-```
-
-That uses [`configs/dev_5.yaml`](configs/dev_5.yaml) and runs the data flow on five objects.
-
-## Training / Eval Notes
-
-- RL hard mining is enabled by default and uses `datasets/hard_prompts.csv` when present.
-- The RL trainer sends the current reward config with each reward batch request, so Hydra reward overrides apply server-side without redeploying the API.
-- Eval reuses the same `Blender3DHarness` and reward API path as RL.
-- If `wandb_enabled=false`, training still runs without W&B.
-
-## Metrics
-
-Primary metrics returned by the reward/eval path:
-
-- `f_score_005`
-- `chamfer`
-- `hausdorff_90`
-- `normal_consistency`
-- execution rate
-- geometry rate
-- mean reward
-
-Configured point counts:
-
-- `metrics.num_sample_points_fast = 10000`
-- `metrics.num_sample_points_eval = 100000`
-
-Current implementation note: the live Modal reward batch path currently calls metrics with `10000` sample points.
+- `baseline`: base instruct model
+- `candidate`: current RL run
+- `reference`: optional extra checkpoint

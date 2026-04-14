@@ -1,9 +1,0 @@
-# Prioritize geometric accuracy: 85% geometry, 10% CLIP, 5% format.
-geometric_weight: 0.85
-text_alignment_weight: 0.10
-format_reward_weight: 0.05
-geometry:
-  resemblance:
-    threshold: 0.05
-text_alignment:
-  threshold: 0.25

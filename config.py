@@ -1,32 +1,21 @@
 """
-Central configuration system using Pydantic models.
-
-Provides typed, validated configuration for every component of the pipeline:
-data curation, synthetic generation, Modal infrastructure, training, and evaluation.
-
-CLI entry points use Hydra for config groups, overrides, and multirun sweeps::
-
-    python -m training.rl_trainer reward=geometry_heavy rl.learning_rate=1e-5
-    python -m training.rl_trainer --multirun reward.geometry.resemblance.threshold=0.04,0.05,0.06
-
-For programmatic use::
-
-    from config import load_config, ProjectConfig
-    cfg = load_config()                          # Pydantic defaults + env vars
-    cfg = load_config("configs/default.yaml")    # from YAML
+Central configuration system for the retained RL + eval workflow.
 """
 
 from __future__ import annotations
 
+import argparse
 import os
 from pathlib import Path
-from typing import Any
+from typing import Any, Sequence
 
 import yaml
 from pydantic import BaseModel, Field
-from pydantic_settings import BaseSettings
+
+from prompts import DEFAULT_SYSTEM_PROMPT
 
 _ENV_FILE = "dev.env"
+_DEFAULT_CONFIG_PATH = Path("configs/config.yaml")
 
 
 def _load_env_file(path: str | Path = _ENV_FILE) -> None:
@@ -52,136 +41,14 @@ def _load_env_file(path: str | Path = _ENV_FILE) -> None:
 # Sub-configs
 # ---------------------------------------------------------------------------
 
-class ViewConfig(BaseModel):
-    """Rendering config — used for CLIP eval rendering."""
-    num_views: int = 4
-    resolution: tuple[int, int] = (512, 512)
-    engine: str = "CYCLES"
-    elevation_deg: float = 25.0
-    film_transparent: bool = True
-    sun_energy: float = 3.0
-    camera_distance_factor: float = 2.5
-    cycles_samples: int = 128
-
-
-class QualityGateConfig(BaseModel):
-    min_faces: int = 4
-    max_vertices: int = 100_000
-    cd_threshold: float = 0.05
-    min_f_score_005: float = 0.05
-
-
-class ObjaverseFilterConfig(BaseModel):
-    """Objaverse 1.0 quality filtering via LVIS annotations + metadata."""
-    min_face_count: int = 100
-    max_vertex_count: int = 500_000
-    exclude_animated: bool = True
-    max_uids: int | None = None
-    output_path: str = "datasets/filtered_uids.json"
-
-
-class SyntheticGenConfig(BaseModel):
-    """Teacher LLM synthetic data generation."""
-    teacher_model: str = "gpt-5.3-codex"
-    teacher_provider: str = "openai"
-    teacher_api: str = "auto"
-    teacher_reasoning_effort: str = "high"
-    temperature: float = 0.7
-    samples_per_caption: int = 3
-    max_attempts_per_caption: int = 3
-    max_concurrent_llm: int = 32
-    max_concurrent_blender: int = 64
-    queue_size: int = 512
-    num_producers: int = 16
-    num_consumers: int = 64
-    cd_threshold: float = 0.05
-    f_score_threshold: float = 0.1
-    min_faces: int = 4
-    max_vertices: int = 100_000
-    batch_size: int = 50
-    output_path: str = "datasets/synthetic_sft.jsonl"
-    hard_prompts_path: str = "datasets/hard_prompts.csv"
-    checkpoint_path: str = "datasets/synthetic_checkpoint.json"
-    volume_artifact_dir: str = "/data/synthetic"
-
-
-class HardMiningConfig(BaseModel):
-    """Controls hard prompt sampling during RLVR."""
-    enabled: bool = True
-    hard_prompts_csv: str = "datasets/hard_prompts.csv"
-    hard_prompt_ratio: float = 0.4
-    min_failure_rate: float = 0.5
-    min_attempts: int = 2
-
-
 class DatasetConfig(BaseModel):
-    sft_train_ratio: float = 0.90
-    sft_val_ratio: float = 0.05
-    eval_id_ratio: float = 0.03
-    eval_ood_ratio: float = 0.02
-    curriculum: bool = True
-    difficulty_weights: dict[str, float] = Field(default_factory=lambda: {
-        "code_length_tokens": 0.4,
-        "vertex_count": 0.3,
-        "face_count": 0.3,
-    })
-    system_prompt: str = (
-        "You are an expert Blender Python developer targeting Blender 4.2. "
-        "Given a text description of a 3D object, write a complete bpy script that creates "
-        "the described geometry with appropriate materials.\n\n"
-        "APPROACH: Decompose the object into logical parts, build each with the best Blender "
-        "construct (primitives, BMesh, curves, modifiers), add materials via Principled BSDF, "
-        "then export.\n\n"
-        "REQUIRED STRUCTURE:\n"
-        "1. `import bpy, os, math, bmesh` and clear the scene\n"
-        "2. Create geometry for each part\n"
-        "3. Add materials (Principled BSDF)\n"
-        "4. Apply smooth shading via bpy.ops.object.shade_smooth()\n"
-        "5. Select all and export: bpy.ops.wm.obj_export(filepath=os.environ['EXPORT_PATH'], "
-        "export_selected_objects=True, export_materials=False, apply_modifiers=True)\n\n"
-        "BLENDER 4.2 RULES:\n"
-        "- NEVER use obj.data.use_auto_smooth (removed)\n"
-        "- NEVER use bpy.ops.export_scene.obj() (removed)\n"
-        "- Use 'BLENDER_EEVEE_NEXT' not 'BLENDER_EEVEE'\n"
-        "- Use 'Specular IOR Level' not 'Specular' in Principled BSDF\n"
-        "- mathutils is top-level: from mathutils import Vector\n"
-        "- After join()/remove(), re-acquire object references\n"
-        "- BMesh: always ensure_lookup_table() and bm.free()\n\n"
-        "Output only the Python code, no explanations."
-    )
+    system_prompt: str = DEFAULT_SYSTEM_PROMPT
 
 
 class ModalConfig(BaseModel):
-    blender_version: str = "4.2.0"
-    blender_cpu: int = 2
-    blender_memory_mb: int = 4096
-    blender_timeout_s: int = 150
-    exec_timeout_s: int = 120
-    metrics_cpu: int = 2
-    metrics_memory_mb: int = 2048
-    metrics_timeout_s: int = 60
-    render_cpu: int = 2
-    render_memory_mb: int = 4096
-    render_timeout_s: int = 300
-    reward_cpu: int = 4
-    reward_memory_mb: int = 8192
-    reward_timeout_s: int = 600
-    reward_concurrency: int = 50
-    reward_keep_warm: int = 1
-    max_parallel_workers: int = 128
-    render_gpu: str = "T4"
     endpoint: str = ""
     auth_token: str = ""
     volume_name: str = "llm3d-data"
-
-
-class MetricsConfig(BaseModel):
-    num_sample_points_fast: int = 10_000
-    num_sample_points_eval: int = 100_000
-    f_score_thresholds: list[float] = Field(default_factory=lambda: [0.01, 0.05])
-    hausdorff_percentile: float = 90.0
-    clip_model: str = "openai/clip-vit-large-patch14"
-    clip_num_views: int = 4
 
 
 class BinaryRewardConfig(BaseModel):
@@ -209,10 +76,6 @@ class GeometryRewardConfig(BaseModel):
     )
 
 
-class TextAlignmentRewardConfig(NumericBinaryRewardConfig):
-    requires_resemblance: bool = True
-
-
 class FormatRewardConfig(BaseModel):
     import_first: BinaryRewardConfig = Field(default_factory=BinaryRewardConfig)
     has_comments: BinaryRewardConfig = Field(default_factory=BinaryRewardConfig)
@@ -221,75 +84,81 @@ class FormatRewardConfig(BaseModel):
 
 
 class RewardConfig(BaseModel):
-    geometric_weight: float = 0.7
-    text_alignment_weight: float = 0.2
+    geometric_weight: float = 0.9
     format_reward_weight: float = 0.1
     geometry: GeometryRewardConfig = Field(default_factory=GeometryRewardConfig)
-    text_alignment: TextAlignmentRewardConfig = Field(
-        default_factory=lambda: TextAlignmentRewardConfig(threshold=0.25)
-    )
     format: FormatRewardConfig = Field(default_factory=FormatRewardConfig)
 
 
-class TinkerConfig(BaseModel):
-    """Tinker platform settings.  TINKER_API_KEY is read from env by the SDK."""
-    base_model: str = "Qwen/Qwen2.5-Coder-7B-Instruct"
-
-
-class SFTConfig(BaseModel):
+class RLConfig(BaseModel):
     base_model: str = "Qwen/Qwen2.5-Coder-7B-Instruct"
     lora_rank: int = 32
-    lora_alpha: int = 64
     train_mlp: bool = True
     train_attn: bool = True
     train_unembed: bool = True
-    epochs: int = 3
-    batch_size: int = 8
-    grad_accum_steps: int = 4
-    learning_rate: float = 1e-4
-    weight_decay: float = 0.01
-    warmup_steps: int = 100
-    max_seq_length: int = 32768
-    eval_every_n_steps: int = 500
-    eval_num_samples: int = 200
-    eval_temperature: float = 0.0
-    train_path: str = "datasets/sft_train.jsonl"
-    val_path: str = "datasets/sft_val.jsonl"
-
-
-class RLConfig(BaseModel):
-    algorithm: str = "grpo"
-    sft_checkpoint: str = "sft-epoch-2"
+    init_state_path: str = ""
     steps: int = 1000
     batch_size: int = 16
     num_completions: int = 8
     learning_rate: float = 5e-6
-    kl_coeff: float = 0.05
-    clip_ratio: float = 0.2
     temperature: float = 0.7
     max_new_tokens: int = 4096
+    stop: list[str] = Field(default_factory=lambda: ["<|im_end|>"])
     checkpoint_every: int = 100
     log_every: int = 10
     prompt_path: str = "datasets/rl_prompts.jsonl"
 
 
+class EvalConditionConfig(BaseModel):
+    enabled: bool = True
+    base_model: str = ""
+    model_path: str = ""
+    temperature: float = 0.0
+    max_new_tokens: int = 4096
+    num_samples: int = 1
+    stop: list[str] = Field(default_factory=lambda: ["<|im_end|>"])
+
+
+class EvalConditionsConfig(BaseModel):
+    baseline: EvalConditionConfig = Field(
+        default_factory=lambda: EvalConditionConfig(enabled=True)
+    )
+    candidate: EvalConditionConfig = Field(
+        default_factory=lambda: EvalConditionConfig(enabled=False)
+    )
+    reference: EvalConditionConfig = Field(
+        default_factory=lambda: EvalConditionConfig(enabled=False)
+    )
+
+
 class EvalConfig(BaseModel):
-    id_test_size: int = 1500
-    ood_objaverse: int = 500
-    ood_gso: int = 300
-    ood_unseen_categories: int = 200
-    unseen_categories: list[str] = Field(default_factory=lambda: [
-        "fork", "spoon", "tv", "window", "door",
-    ])
+    id_path: str = "datasets/eval_id.jsonl"
+    ood_path: str = ""
     temperature: float = 0.0
     bootstrap_samples: int = 10_000
+    batch_size: int = 16
+    max_concurrent_tinker: int = 8
+    save_details: bool = True
+    max_cases_per_test_set: int | None = None
+    conditions: EvalConditionsConfig = Field(default_factory=EvalConditionsConfig)
+    selection: "EvalSelectionConfig" = Field(default_factory=lambda: EvalSelectionConfig())
+
+
+class EvalSelectionConfig(BaseModel):
+    output_path: str = "datasets/eval_id.jsonl"
+    manifest_path: str = ""
+    target_size: int = 500
+    max_per_category: int = 2
+
+
+EvalConfig.model_rebuild()
 
 
 class StorageConfig(BaseModel):
-    """Remote storage via HuggingFace Storage Buckets."""
-    backend: str = "hf"  # "local" | "hf"
+    """Remote storage via HuggingFace buckets."""
+    backend: str = "hf"
     hf_bucket: str = "llm3d-data"
-    hf_bucket_namespace: str = ""  # e.g. "username" -> hf://buckets/username/llm3d-data
+    hf_bucket_namespace: str = ""
     cache_dir: str = ".cache/hf_data"
     local_manifest_path: str = "data/manifest.jsonl"
     manifest_key: str = "datasets/manifest.jsonl"
@@ -308,64 +177,133 @@ class LoggingConfig(BaseModel):
 # Root config
 # ---------------------------------------------------------------------------
 
-class ProjectConfig(BaseSettings):
+class ProjectConfig(BaseModel):
     """Root configuration — aggregates all sub-configs."""
+
+    model_config = {"extra": "ignore"}
 
     project_name: str = "llm-3d"
     seed: int = 42
     output_dir: str = "./output"
-    data_dir: str = "./data"
-    blender_path: str = "blender"
 
-    views: ViewConfig = Field(default_factory=ViewConfig)
-    quality_gate: QualityGateConfig = Field(default_factory=QualityGateConfig)
-    objaverse_filter: ObjaverseFilterConfig = Field(default_factory=ObjaverseFilterConfig)
-    synthetic_gen: SyntheticGenConfig = Field(default_factory=SyntheticGenConfig)
-    hard_mining: HardMiningConfig = Field(default_factory=HardMiningConfig)
     dataset: DatasetConfig = Field(default_factory=DatasetConfig)
     modal: ModalConfig = Field(default_factory=ModalConfig)
-    metrics: MetricsConfig = Field(default_factory=MetricsConfig)
     reward: RewardConfig = Field(default_factory=RewardConfig)
-    tinker: TinkerConfig = Field(default_factory=TinkerConfig)
-    sft: SFTConfig = Field(default_factory=SFTConfig)
     rl: RLConfig = Field(default_factory=RLConfig)
     eval: EvalConfig = Field(default_factory=EvalConfig)
     storage: StorageConfig = Field(default_factory=StorageConfig)
     logging: LoggingConfig = Field(default_factory=LoggingConfig)
-
-    model_config = {
-        "env_prefix": "LLM3D_",
-        "env_nested_delimiter": "__",
-        "extra": "ignore",
-    }
 
 
 # ---------------------------------------------------------------------------
 # Loading helpers
 # ---------------------------------------------------------------------------
 
+def _deep_merge(base: dict[str, Any], updates: dict[str, Any]) -> dict[str, Any]:
+    merged = dict(base)
+    for key, value in updates.items():
+        current = merged.get(key)
+        if isinstance(current, dict) and isinstance(value, dict):
+            merged[key] = _deep_merge(current, value)
+        else:
+            merged[key] = value
+    return merged
+
+
+def _parse_override_value(raw_value: str) -> Any:
+    if raw_value == "":
+        return ""
+    return yaml.safe_load(raw_value)
+
+
+def _set_nested_value(data: dict[str, Any], dotted_key: str, value: Any) -> None:
+    current = data
+    parts = [part.strip() for part in dotted_key.split(".") if part.strip()]
+    if not parts:
+        raise ValueError("Override key cannot be empty")
+
+    for part in parts[:-1]:
+        next_value = current.get(part)
+        if not isinstance(next_value, dict):
+            next_value = {}
+            current[part] = next_value
+        current = next_value
+    current[parts[-1]] = value
+
+
+def apply_cli_overrides(data: dict[str, Any], overrides: Sequence[str]) -> dict[str, Any]:
+    updated = dict(data)
+    for override in overrides:
+        if "=" not in override:
+            raise ValueError(
+                f"Invalid override {override!r}. Expected dotted assignments like rl.learning_rate=1e-5."
+            )
+        key, raw_value = override.split("=", 1)
+        _set_nested_value(updated, key, _parse_override_value(raw_value))
+    return updated
+
+
 def load_config(
     yaml_path: str | Path | None = None,
+    cli_overrides: Sequence[str] | None = None,
     **overrides: Any,
 ) -> ProjectConfig:
-    """Build a ``ProjectConfig`` from optional YAML + keyword overrides.
-
-    For CLI usage with config groups, overrides, and multirun sweeps, prefer
-    the Hydra entry points (``python -m training.rl_trainer ...``).
-
-    This function remains available for programmatic and data-pipeline use.
-    """
+    """Build a ``ProjectConfig`` from YAML + env overlay + optional CLI overrides."""
     _load_env_file()
 
-    data: dict = {}
+    path = Path(yaml_path) if yaml_path is not None else _DEFAULT_CONFIG_PATH
+    data: dict[str, Any] = {}
 
-    if yaml_path is not None:
-        path = Path(yaml_path)
-        if path.exists():
-            with open(path, encoding="utf-8") as f:
-                data = yaml.safe_load(f) or {}
+    if path.exists():
+        with open(path, encoding="utf-8") as f:
+            data = yaml.safe_load(f) or {}
+
+    modal = data.setdefault("modal", {})
+    storage = data.setdefault("storage", {})
+    logging_cfg = data.setdefault("logging", {})
+
+    modal["endpoint"] = os.environ.get("LLM3D_MODAL__ENDPOINT", modal.get("endpoint", ""))
+    modal["auth_token"] = os.environ.get("LLM3D_MODAL__AUTH_TOKEN", modal.get("auth_token", ""))
+    modal["volume_name"] = os.environ.get("LLM3D_MODAL__VOLUME_NAME", modal.get("volume_name", "llm3d-data"))
+
+    storage["hf_bucket"] = os.environ.get("LLM3D_STORAGE__HF_BUCKET", storage.get("hf_bucket", "llm3d-data"))
+    storage["hf_bucket_namespace"] = os.environ.get(
+        "LLM3D_STORAGE__HF_BUCKET_NAMESPACE",
+        storage.get("hf_bucket_namespace", ""),
+    )
+    storage["cache_dir"] = os.environ.get("LLM3D_STORAGE__CACHE_DIR", storage.get("cache_dir", ".cache/hf_data"))
+
+    if "WANDB_PROJECT" in os.environ:
+        logging_cfg["wandb_project"] = os.environ["WANDB_PROJECT"]
+
+    if cli_overrides:
+        data = apply_cli_overrides(data, cli_overrides)
 
     if overrides:
-        data.update(overrides)
+        data = _deep_merge(data, overrides)
 
     return ProjectConfig(**data)
+
+
+def build_config_arg_parser(description: str) -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description=description)
+    parser.add_argument(
+        "--config",
+        default=str(_DEFAULT_CONFIG_PATH),
+        help="Path to the YAML config file.",
+    )
+    parser.add_argument(
+        "overrides",
+        nargs="*",
+        help="Dotted config overrides like rl.learning_rate=1e-5",
+    )
+    return parser
+
+
+def load_config_from_cli(
+    *,
+    description: str,
+    argv: Sequence[str] | None = None,
+) -> ProjectConfig:
+    args = build_config_arg_parser(description).parse_args(list(argv) if argv is not None else None)
+    return load_config(args.config, cli_overrides=args.overrides)

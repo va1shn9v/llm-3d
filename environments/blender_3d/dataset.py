@@ -1,5 +1,5 @@
 """
-Blender3DDataset — provides text prompts for text-to-3D code generation training.
+Prompt dataset for Blender code generation.
 """
 
 from __future__ import annotations
@@ -11,53 +11,30 @@ from typing import Any
 
 from config import StorageConfig
 from data.storage import open_read
+from prompts import DEFAULT_SYSTEM_PROMPT, format_user_prompt
 
 log = logging.getLogger(__name__)
 
-SYSTEM_PROMPT = (
-    "You are an expert Blender Python developer targeting Blender 4.2. "
-    "Given a text description of a 3D object, write a complete bpy script that creates "
-    "the described geometry with appropriate materials.\n\n"
-    "APPROACH: Decompose the object into logical parts, build each with the best Blender "
-    "construct (primitives, BMesh, curves, modifiers), add materials via Principled BSDF, "
-    "then export.\n\n"
-    "REQUIRED STRUCTURE:\n"
-    "1. `import bpy, os, math, bmesh` and clear the scene\n"
-    "2. Create geometry for each part\n"
-    "3. Add materials (Principled BSDF)\n"
-    "4. Apply smooth shading via bpy.ops.object.shade_smooth()\n"
-    "5. Select all and export: bpy.ops.wm.obj_export(filepath=os.environ['EXPORT_PATH'], "
-    "export_selected_objects=True, export_materials=False, apply_modifiers=True)\n\n"
-    "BLENDER 4.2 RULES:\n"
-    "- NEVER use obj.data.use_auto_smooth (removed)\n"
-    "- NEVER use bpy.ops.export_scene.obj() (removed)\n"
-    "- Use 'BLENDER_EEVEE_NEXT' not 'BLENDER_EEVEE'\n"
-    "- Use 'Specular IOR Level' not 'Specular' in Principled BSDF\n"
-    "- mathutils is top-level: from mathutils import Vector\n"
-    "- After join()/remove(), re-acquire object references\n"
-    "- BMesh: always ensure_lookup_table() and bm.free()\n\n"
-    "Output only the Python code, no explanations."
-)
-
-
 class Blender3DDataset:
-    """Dataset of text descriptions → Blender Python code problems.
+    """Dataset of prompt records for Blender Python generation.
 
     Each item provides:
-    - text:         str (the caption / text description)
-    - object_id:    str (UID for looking up GT mesh)
-    - gt_code:      str (for SFT reference, not used in RL)
-    - gt_mesh_path: str (path to ground-truth mesh for reward computation)
-    - prompt:       str (formatted user prompt text)
+    - text: caption text
+    - object_id: UID for reward lookup
+    - gt_code: optional reference code
+    - gt_mesh_path: path/URI to the ground-truth mesh
+    - prompt: rendered user prompt text
     """
 
     def __init__(
         self,
         jsonl_path: str | Path,
         storage_cfg: StorageConfig | None = None,
+        system_prompt: str = DEFAULT_SYSTEM_PROMPT,
     ):
         self.jsonl_path = str(jsonl_path)
         self.storage_cfg = storage_cfg
+        self.system_prompt = system_prompt
         self._items: list[dict[str, Any]] = []
         self._load()
 
@@ -98,16 +75,11 @@ class Blender3DDataset:
     def format_prompt(self, item: dict[str, Any]) -> list[dict]:
         """Format as text-only chat messages."""
         messages = [
-            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "system", "content": self.system_prompt},
             {"role": "user", "content": self.format_prompt_text(item["text"])},
         ]
         return messages
 
     @staticmethod
     def format_prompt_text(caption: str) -> str:
-        return (
-            f"Create a 3D model of: {caption}\n\n"
-            f"Decompose the object into its main parts, build each with appropriate "
-            f"Blender constructs (primitives, BMesh, curves, modifiers), add materials, "
-            f"and export to OBJ. Write a complete Blender Python script."
-        )
+        return format_user_prompt(caption)

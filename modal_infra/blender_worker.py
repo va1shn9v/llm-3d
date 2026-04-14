@@ -1,9 +1,5 @@
 """
-Modal function: execute raw Blender Python code in an isolated container.
-
-Runs raw `import bpy` scripts in an isolated container. Sets EXPORT_PATH env var
-so scripts know where to write their output mesh. Auto-exports if the script
-doesn't write to EXPORT_PATH itself.
+Modal functions for Blender execution and mesh syncing.
 """
 
 from __future__ import annotations
@@ -276,17 +272,6 @@ def execute_blender_code(code: str, seed: int = 42) -> dict[str, Any]:
         }
 
 
-@app.function(image=blender_image, volumes={"/data": volume}, timeout=30)
-def store_mesh_artifact(uid: str, mesh_bytes: bytes, subdir: str = "synthetic") -> str:
-    """Persist a validated mesh to the Modal Volume for downstream reuse."""
-    path = f"/data/{subdir}/{uid}.obj"
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    with open(path, "wb") as f:
-        f.write(mesh_bytes)
-    volume.commit()
-    return path
-
-
 _sync_image = modal.Image.debian_slim(python_version="3.11").pip_install(
     "huggingface_hub>=1.5.0",
 )
@@ -328,49 +313,6 @@ def sync_from_hf_bucket(
 
     volume.commit()
     return count
-
-
-_SUPPORTED_MESH_EXTS = (".obj", ".glb", ".gltf", ".ply", ".stl")
-
-
-def _load_gt_mesh_from_volume(object_id: str, volume_subdir: str = "meshes") -> tuple[bytes, str] | None:
-    for ext in _SUPPORTED_MESH_EXTS:
-        path = Path(f"/data/{volume_subdir}/{object_id}{ext}")
-        if path.exists():
-            return path.read_bytes(), ext.lstrip(".")
-    return None
-
-
-@app.function(image=blender_image, volumes={"/data": volume}, timeout=120, cpu=2, memory=4096)
-def compute_metrics_against_volume_mesh(
-    object_id: str,
-    gen_mesh_bytes: bytes,
-    gen_mesh_format: str = "obj",
-    num_points: int = 10_000,
-    volume_subdir: str = "meshes",
-) -> dict[str, Any]:
-    """Compare generated mesh bytes against a GT mesh stored in the Modal volume."""
-    gt = _load_gt_mesh_from_volume(object_id, volume_subdir)
-    if gt is None:
-        return {
-            "chamfer": float("inf"),
-            "f_score_001": 0.0,
-            "f_score_005": 0.0,
-            "hausdorff_90": float("inf"),
-            "normal_consistency": 0.0,
-            "error": f"GT mesh not found in Modal volume for {object_id}",
-        }
-
-    gt_bytes, gt_format = gt
-    compute_metrics = modal.Function.from_name("llm3d-metrics-worker", "compute_metrics")
-    return compute_metrics.remote(
-        gen_mesh_bytes,
-        gt_bytes,
-        num_points,
-        gen_mesh_format,
-        gt_format,
-    )
-
 
 def _get_mesh_stats(mesh_bytes: bytes) -> dict:
     """Quick vertex/face count from raw OBJ bytes.

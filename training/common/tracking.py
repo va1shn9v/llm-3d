@@ -1,9 +1,5 @@
 """
 Weights & Biases logging wrapper.
-
-Provides a thin abstraction so the rest of the training code only calls
-`WandbLogger` and never touches `wandb` directly.  When wandb is disabled
-(or not installed) every method is a silent no-op.
 """
 
 from __future__ import annotations
@@ -38,7 +34,7 @@ class WandbLogger:
         self._run: Any = None
 
         if cfg.wandb_enabled and not _HAS_WANDB:
-            log.warning("wandb logging requested but `wandb` is not installed — skipping")
+            log.warning("wandb logging requested but `wandb` is not installed; skipping")
             return
 
         if not self._enabled:
@@ -65,8 +61,8 @@ class WandbLogger:
     def log_summary(self, payload: dict[str, Any]) -> None:
         if not self.enabled:
             return
-        for k, v in payload.items():
-            wandb.run.summary[k] = v
+        for key, value in payload.items():
+            wandb.run.summary[key] = value
 
     def define_metric(self, name: str, *, step_metric: str = "step") -> None:
         if not self.enabled:

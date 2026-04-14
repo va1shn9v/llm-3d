@@ -18,7 +18,13 @@ modal token check 2>/dev/null || {
     exit 1
 }
 
-# Deploy
+echo "Deploying Blender worker..."
+modal deploy modal_infra/blender_worker.py
+
+echo "Deploying metrics worker..."
+modal deploy modal_infra/metrics_worker.py
+
+echo "Deploying reward API..."
 modal deploy modal_infra/reward_server.py
 
 echo ""

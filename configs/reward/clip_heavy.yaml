@@ -1,9 +1,0 @@
-# Emphasize text-3D alignment via CLIP: 50% geometry, 40% CLIP, 10% format.
-geometric_weight: 0.50
-text_alignment_weight: 0.40
-format_reward_weight: 0.10
-geometry:
-  resemblance:
-    threshold: 0.05
-text_alignment:
-  threshold: 0.20

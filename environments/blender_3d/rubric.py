@@ -1,10 +1,5 @@
 """
-Blender3DRubric — configurable binary-threshold reward with geometric, CLIP, and format components.
-
-Reward = geometric_weight * base + text_alignment_weight * clip + format_weight * format
-
-Each sub-reward is binary: it contributes 1.0 when its criterion passes and 0.0 otherwise.
-Category scores are weighted averages of their enabled sub-rewards.
+Binary-threshold reward with geometry and format components.
 """
 
 from __future__ import annotations
@@ -34,14 +29,12 @@ class Blender3DRubric:
         code: str,
         exec_result: dict[str, Any],
         text_description: str = "",
-        clip_score: float | None = None,
     ) -> float:
-        """Compute combined reward: geometric + CLIP + format."""
+        """Compute combined reward: geometric + format."""
         return self.evaluate(
             code,
             exec_result,
             text_description=text_description,
-            clip_score=clip_score,
         )["reward"]
 
     def evaluate(
@@ -49,7 +42,6 @@ class Blender3DRubric:
         code: str,
         exec_result: dict[str, Any],
         text_description: str = "",
-        clip_score: float | None = None,
     ) -> dict[str, Any]:
         """Compute weighted binary rewards and return component details."""
         del text_description
@@ -57,25 +49,17 @@ class Blender3DRubric:
         geometry_score, geometry_checks = self._base_reward(code, exec_result)
         format_score, format_checks = self._format_reward(code)
 
-        resemblance_passed = bool(geometry_checks.get("resemblance"))
-        text_align_score = self._text_alignment_reward(clip_score, resemblance_passed)
-
         total = (
             self.cfg.geometric_weight * geometry_score
-            + self.cfg.text_alignment_weight * text_align_score
             + self.cfg.format_reward_weight * format_score
         )
 
         return {
             "reward": total,
             "base_reward": geometry_score,
-            "text_alignment_reward": text_align_score,
             "format_reward": format_score,
             "sub_rewards": {
                 "geometry": geometry_checks,
-                "text_alignment": {
-                    "clip_threshold": 1.0 if text_align_score else 0.0,
-                },
                 "format": format_checks,
             },
         }
@@ -114,19 +98,6 @@ class Blender3DRubric:
             ),
         }
         return self._aggregate(checks, cfg.geometry)
-
-    def _text_alignment_reward(
-        self,
-        clip_score: float | None,
-        resemblance_passed: bool,
-    ) -> float:
-        """Binary CLIP-based text alignment reward."""
-        cfg = self.cfg.text_alignment
-        if not cfg.enabled:
-            return 0.0
-        if cfg.requires_resemblance and not resemblance_passed:
-            return 0.0
-        return float(clip_score is not None and clip_score >= cfg.threshold)
 
     def _format_reward(self, code: str) -> tuple[float, dict[str, float]]:
         """Binary format reward for raw bpy code structure."""
@@ -213,13 +184,12 @@ class Blender3DRubric:
         self,
         items: list[dict[str, Any]],
     ) -> list[float]:
-        """Score a batch of (code, exec_result, text, clip_score) dicts."""
+        """Score a batch of (code, exec_result, text) dicts."""
         return [
             self.score(
                 item.get("code", ""),
                 item,
                 text_description=item.get("text_description", ""),
-                clip_score=item.get("clip_score"),
             )
             for item in items
         ]
