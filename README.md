@@ -1,69 +1,49 @@
 # llm-3d
 
-Direct RL and evaluation for Blender Python code generation.
+Train and evaluate instruct models that generate Blender Python for 3D object creation.
 
-This repo is intentionally scoped to two workflows:
+The project is built around one loop:
 
-1. Build a curated evaluation set from an existing manifest of objects already stored in your HF bucket.
-2. Run direct RL on an instruct model, then evaluate generated Blender code through the same Modal reward path.
-
-## What Remains
-
-- `training/rl/`: RL sampler + direct GRPO trainer
-- `training/eval/`: Tinker sampling + Modal-backed evaluation
-- `training/common/`: shared Tinker and experiment-tracking helpers
-- `data/eval_dataset.py`: builds a diverse eval set from an existing manifest
-- `environments/blender_3d/`: prompt dataset, reward harness, and rubric
-- `modal_infra/`: Blender execution worker, metrics worker, and reward API
-- `scripts/build_eval_dataset.sh`: curate the eval set
-- `scripts/preload_modal_meshes.sh`: sync GT meshes from the HF bucket into the Modal volume
-- `scripts/deploy_reward_api.sh`: deploy the reward API
-- `scripts/run_rl.sh`: direct RL
-- `scripts/run_eval.sh`: evaluation
-
-Removed from the repo:
-
-- synthetic teacher generation
-- SFT training
-- Objaverse filtering / manifest ingestion
-- image-conditioned preprocessing and render workers
-- stale SFT/image-era configs
+1. Build a curated evaluation set from an existing object manifest.
+2. Sync ground-truth meshes into Modal and deploy the reward API.
+3. Run direct RL on an instruct model.
+4. Evaluate checkpoints against the same reward path.
 
 ## Setup
+
+Install dependencies:
 
 ```bash
 pip install -e ".[all]"
 ```
 
-Create `dev.env` from the example:
+Create a local env file:
 
 ```bash
 cp dev.env.example dev.env
 ```
 
-Important variables:
+Important environment variables:
 
 | Variable | Purpose |
 |---|---|
 | `HF_TOKEN` | Hugging Face bucket access |
-| `LLM3D_STORAGE__HF_BUCKET` | Bucket name |
+| `LLM3D_STORAGE__HF_BUCKET` | HF bucket name |
 | `LLM3D_STORAGE__HF_BUCKET_NAMESPACE` | HF namespace / org |
 | `MODAL_TOKEN_ID` | Modal auth |
 | `MODAL_TOKEN_SECRET` | Modal auth |
-| `LLM3D_MODAL__ENDPOINT` | Deployed reward API base URL |
+| `LLM3D_MODAL__ENDPOINT` | Reward API base URL |
 | `LLM3D_MODAL__AUTH_TOKEN` | Client token sent to the reward API |
 | `LLM3D_MODAL__VOLUME_NAME` | Modal volume name |
 | `REWARD_API_TOKEN` | Server-side token checked by the reward API |
 | `TINKER_API_KEY` | Tinker access |
-| `WANDB_API_KEY` | Optional experiment logging |
-
-`config.load_config()` reads `configs/config.yaml` and applies a small explicit env overlay for the Modal/HF fields above.
+| `WANDB_API_KEY` | Optional W&B logging |
 
 ## Config
 
-The repo now uses a single default config file: `configs/config.yaml`.
+The default config lives in [configs/config.yaml](/Users/vaishnavp/Desktop/llm-3d/configs/config.yaml).
 
-Override any value directly on the CLI with dotted `key=value` assignments:
+Use dotted CLI overrides for experiments:
 
 ```bash
 ./scripts/run_rl.sh rl.learning_rate=1e-5 rl.steps=200
@@ -71,38 +51,62 @@ Override any value directly on the CLI with dotted `key=value` assignments:
 ./scripts/run_eval.sh eval.conditions.candidate.enabled=true eval.conditions.candidate.model_path=ckpts/rl-step-500
 ```
 
-The active config surface is:
+Main config sections:
 
-- `dataset.system_prompt`
-- `storage.*` for the manifest and HF bucket
-- `modal.endpoint`, `modal.auth_token`, `modal.volume_name`
-- `reward.*` for geometry/format scoring
-- `rl.*` for direct RL hyperparameters and prompt dataset path
-- `eval.*` for eval dataset paths, selection settings, and comparison conditions
-- `logging.*`
+- `storage.*`: HF manifest and mesh storage
+- `modal.*`: reward API endpoint and auth
+- `reward.*`: geometry and format reward settings
+- `rl.*`: direct RL hyperparameters and prompt dataset path
+- `eval.*`: eval dataset paths, selection settings, and model conditions
+- `logging.*`: logging and W&B
 
-## Eval Set
+## Data
 
-The repo assumes you already have a manifest of `{uid, caption, mesh_path}` entries, either locally or in the configured HF bucket.
+The eval-set builder expects a manifest of JSONL records with:
 
-Build a curated eval set:
+```json
+{"uid": "...", "caption": "...", "mesh_path": "..."}
+```
+
+By default the manifest is read from `storage.manifest_key` in the configured HF bucket, or from `eval.selection.manifest_path` if you set one explicitly.
+
+The curated eval output is written to `eval.selection.output_path`, which defaults to `datasets/eval_id.jsonl`.
+
+## Commands
+
+Build the curated eval set:
 
 ```bash
 ./scripts/build_eval_dataset.sh
 ```
 
-By default this writes `datasets/eval_id.jsonl` using:
+Sync meshes into the Modal volume:
 
-- `eval.selection.output_path`
-- `eval.selection.manifest_path` if set, otherwise `storage.manifest_key`
-- `eval.selection.target_size`
-- `eval.selection.max_per_category`
+```bash
+./scripts/preload_modal_meshes.sh
+```
 
-The selector is conservative: it filters obviously noisy captions and round-robins across inferred categories to keep the set diverse.
+Deploy the reward stack:
 
-## Reward Path
+```bash
+./scripts/deploy_reward_api.sh
+```
 
-Reward is intentionally simple and live:
+Run direct RL:
+
+```bash
+./scripts/run_rl.sh
+```
+
+Run evaluation:
+
+```bash
+./scripts/run_eval.sh
+```
+
+## Reward
+
+Reward is computed as:
 
 ```text
 reward =
@@ -110,73 +114,25 @@ reward =
   format_reward_weight * format_score
 ```
 
-Geometry checks:
+Geometry checks include execution success, face/vertex limits, metric availability, and resemblance via `f_score_005`.
 
-- non-empty code
-- `import bpy`
-- execution success
-- minimum face count
-- maximum vertex count
-- metrics available
-- resemblance via `f_score_005`
+Format checks include `import bpy` structure, scene clearing, comments, and export behavior.
 
-Format checks:
+## Code Layout
 
-- import first
-- has comments
-- clears scene
-- has export
+- [training/rl](/Users/vaishnavp/Desktop/llm-3d/training/rl): RL prompt sampling and training loop
+- [training/eval](/Users/vaishnavp/Desktop/llm-3d/training/eval): evaluation runner and condition handling
+- [training/common](/Users/vaishnavp/Desktop/llm-3d/training/common): shared Tinker and tracking helpers
+- [data/eval_dataset.py](/Users/vaishnavp/Desktop/llm-3d/data/eval_dataset.py): eval-set builder
+- [environments/blender_3d](/Users/vaishnavp/Desktop/llm-3d/environments/blender_3d): prompt dataset, reward harness, rubric
+- [modal_infra](/Users/vaishnavp/Desktop/llm-3d/modal_infra): Blender execution, metrics, and reward API
 
-There is no dead CLIP/text-alignment path in the active repo.
-
-## Modal
-
-Sync meshes into the Modal volume used by reward/eval:
+## Typical Flow
 
 ```bash
+./scripts/build_eval_dataset.sh
 ./scripts/preload_modal_meshes.sh
-```
-
-Deploy the reward API:
-
-```bash
 ./scripts/deploy_reward_api.sh
-```
-
-Active endpoints:
-
-- `POST /reward/batch`
-- `POST /reward/single`
-- `POST /execute`
-- `GET /health`
-- `GET /artifacts/pair/{uid}`
-- `GET /artifacts/gt/{uid}`
-
-## Training
-
-Run direct RL on the instruct base model configured in `rl.base_model`:
-
-```bash
 ./scripts/run_rl.sh
-```
-
-The RL path lives under `training/rl/` and expects a real Tinker client plus a real prompt dataset at `rl.prompt_path`. There is no dummy fallback.
-
-## Evaluation
-
-Run evaluation against `eval.id_path` and optional `eval.ood_path`:
-
-```bash
 ./scripts/run_eval.sh
 ```
-
-Each enabled eval condition can point either at:
-
-- a raw base model via `base_model`
-- a trained adapter/checkpoint via `model_path`
-
-The default intended comparison is:
-
-- `baseline`: base instruct model
-- `candidate`: current RL run
-- `reference`: optional extra checkpoint
